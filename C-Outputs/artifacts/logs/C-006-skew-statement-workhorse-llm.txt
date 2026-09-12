@@ -1,0 +1,2 @@
+--------- beginning of main
+09-12 15:29:57.919  1497  1697 W BlackoutLlm: Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device

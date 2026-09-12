@@ -1,0 +1,2 @@
+--------- beginning of main
+09-12 15:13:41.488 27863 27863 I BlackoutStats: spans=85 ocr_ms=337 workhorse_ms=47226 summary_ms=1574 referee_ms=30194 total_ms=78994 hide=33 keep=52 unsure=0 referee_queue=28 backend=CPU degraded=false doctype=Savings_Account_Statement

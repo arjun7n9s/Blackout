@@ -1,0 +1,67 @@
+﻿--------- beginning of main
+09-12 15:06:31.091 W/BlackoutLlm(24927): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:06:55.620 W/BlackoutLlm(24927): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:07:13.140 I/BlackoutStats(24927): spans=41 ocr_ms=218 workhorse_ms=19621 summary_ms=1686 referee_ms=14519 total_ms=35826 hide=23 keep=18 unsure=0 referee_queue=15 backend=CPU degraded=false doctype=KYC_Update_Form
+09-12 15:07:28.428 W/BlackoutLlm(25316): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:07:57.443 W/BlackoutLlm(25316): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:08:15.581 I/BlackoutStats(25316): spans=46 ocr_ms=253 workhorse_ms=23173 summary_ms=1312 referee_ms=15475 total_ms=39960 hide=12 keep=34 unsure=0 referee_queue=17 backend=CPU degraded=false doctype=Payslip
+09-12 15:08:30.866 W/BlackoutLlm(25720): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:08:44.503 W/BlackoutLlm(25720): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:08:53.116 I/BlackoutStats(25720): spans=11 ocr_ms=163 workhorse_ms=7903 summary_ms=1295 referee_ms=6016 total_ms=15214 hide=3 keep=8 unsure=0 referee_queue=4 backend=CPU degraded=false doctype=Tax_Invoice
+09-12 15:09:07.687 W/BlackoutLlm(26078): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:09:15.695 W/BlackoutLlm(26078): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:09:21.906 I/BlackoutStats(26078): spans=1 ocr_ms=118 workhorse_ms=2712 summary_ms=664 referee_ms=4114 total_ms=7490 hide=0 keep=1 unsure=0 referee_queue=1 backend=CPU degraded=false doctype=Bank_name
+09-12 15:09:35.161 W/BlackoutLlm(26449): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:09:44.806 W/BlackoutLlm(26449): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:09:52.495 I/BlackoutStats(26449): spans=8 ocr_ms=121 workhorse_ms=4241 summary_ms=815 referee_ms=5565 total_ms=10621 hide=3 keep=5 unsure=0 referee_queue=4 backend=CPU degraded=false doctype=Bank_account_details
+09-12 15:10:05.032 W/BlackoutLlm(26892): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:10:19.154 W/BlackoutLlm(26892): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:10:32.344 I/BlackoutStats(26892): spans=15 ocr_ms=159 workhorse_ms=8777 summary_ms=1357 referee_ms=10522 total_ms=20656 hide=9 keep=6 unsure=0 referee_queue=9 backend=CPU degraded=false doctype=Bank_account_statement
+09-12 15:10:45.709 W/BlackoutLlm(27267): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:11:21.959 W/BlackoutLlm(27267): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:12:02.492 I/BlackoutStats(27267): spans=51 ocr_ms=611 workhorse_ms=30920 summary_ms=2679 referee_ms=36511 total_ms=70110 hide=39 keep=12 unsure=0 referee_queue=29 backend=CPU degraded=false doctype=Financial_transaction_details_or_contrac
+09-12 15:12:15.089 W/BlackoutLlm(27863): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:13:08.258 W/BlackoutLlm(27863): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:13:41.488 I/BlackoutStats(27863): spans=85 ocr_ms=337 workhorse_ms=47226 summary_ms=1574 referee_ms=30194 total_ms=78994 hide=33 keep=52 unsure=0 referee_queue=28 backend=CPU degraded=false doctype=Savings_Account_Statement
+09-12 15:13:54.983 W/BlackoutLlm(28392): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:14:45.552 W/BlackoutLlm(28392): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:15:18.367 I/BlackoutStats(28392): spans=80 ocr_ms=345 workhorse_ms=44812 summary_ms=1679 referee_ms=29649 total_ms=76140 hide=28 keep=52 unsure=0 referee_queue=28 backend=CPU degraded=false doctype=Scanned_text_document
+09-12 15:15:32.872 W/BlackoutLlm(28837): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:16:27.114 W/BlackoutLlm(28837): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:17:12.344 I/BlackoutStats(28837): spans=85 ocr_ms=383 workhorse_ms=48564 summary_ms=1386 referee_ms=42413 total_ms=92363 hide=42 keep=43 unsure=0 referee_queue=39 backend=CPU degraded=false doctype=Bank_statement
+09-12 15:17:27.352 W/BlackoutLlm(29294): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:18:03.699 W/BlackoutLlm(29294): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:18:25.998 I/BlackoutStats(29294): spans=51 ocr_ms=276 workhorse_ms=30500 summary_ms=1396 referee_ms=19546 total_ms=51442 hide=18 keep=33 unsure=0 referee_queue=17 backend=CPU degraded=false doctype=Bank_statement
+09-12 15:18:40.462 W/BlackoutLlm(29712): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:18:51.131 W/BlackoutLlm(29712): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:18:58.434 I/BlackoutStats(29712): spans=8 ocr_ms=158 workhorse_ms=5006 summary_ms=1370 referee_ms=4569 total_ms=10945 hide=3 keep=5 unsure=0 referee_queue=2 backend=CPU degraded=false doctype=Patient_intake_form
+09-12 15:19:32.986 W/BlackoutLlm(30315): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:21:14.252 W/BlackoutLlm(30315): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:24:40.247 W/BlackoutLlm(31515): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:25:35.271 W/BlackoutLlm(31515): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:26:18.887 I/BlackoutStats(31515): spans=87 ocr_ms=374 workhorse_ms=49090 summary_ms=1604 referee_ms=40634 total_ms=91328 hide=21 keep=66 unsure=0 referee_queue=39 backend=CPU degraded=false doctype=Bank_transaction_statement
+09-12 15:26:33.041 W/BlackoutLlm(32106): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:27:23.086 I/BlackoutStats(32106): spans=85 ocr_ms=404 workhorse_ms=48093 summary_ms=0 referee_ms=0 total_ms=48093 hide=27 keep=58 unsure=0 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:27:35.660 W/BlackoutLlm(32536): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:28:25.821 I/BlackoutStats(32536): spans=85 ocr_ms=371 workhorse_ms=48209 summary_ms=0 referee_ms=0 total_ms=48209 hide=25 keep=60 unsure=0 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:28:37.517 W/BlackoutLlm(  500): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:29:04.040 I/BlackoutStats(  500): spans=41 ocr_ms=226 workhorse_ms=24577 summary_ms=0 referee_ms=0 total_ms=24577 hide=23 keep=18 unsure=0 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:29:17.774 W/BlackoutLlm(  825): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:29:45.551 I/BlackoutStats(  825): spans=46 ocr_ms=234 workhorse_ms=25836 summary_ms=0 referee_ms=0 total_ms=25836 hide=18 keep=28 unsure=0 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:29:57.919 W/BlackoutLlm( 1497): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:30:04.646 I/BlackoutStats( 1497): spans=8 ocr_ms=153 workhorse_ms=4784 summary_ms=0 referee_ms=0 total_ms=4784 hide=3 keep=5 unsure=0 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:30:18.205 W/BlackoutLlm( 2125): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:30:55.108 I/BlackoutStats( 2125): spans=51 ocr_ms=627 workhorse_ms=34950 summary_ms=0 referee_ms=0 total_ms=34950 hide=13 keep=35 unsure=3 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:31:08.916 W/BlackoutLlm( 2718): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:32:47.962 I/BlackoutStats( 2718): spans=141 ocr_ms=815 workhorse_ms=97087 summary_ms=0 referee_ms=0 total_ms=97087 hide=131 keep=10 unsure=0 referee_queue=0 backend=CPU degraded=false doctype=-
+09-12 15:32:58.837 I/BlackoutStats( 3604): spans=85 ocr_ms=343 workhorse_ms=0 summary_ms=0 referee_ms=0 total_ms=0 hide=9 keep=76 unsure=0 referee_queue=0 backend=none degraded=true doctype=-
+09-12 15:33:07.949 I/BlackoutStats( 3901): spans=11 ocr_ms=167 workhorse_ms=0 summary_ms=0 referee_ms=0 total_ms=0 hide=1 keep=10 unsure=0 referee_queue=0 backend=none degraded=true doctype=-
+09-12 15:35:17.502 W/BlackoutLlm( 5556): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:35:31.360 W/BlackoutLlm( 5556): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:35:40.540 I/BlackoutStats( 5556): spans=11 ocr_ms=150 workhorse_ms=7950 summary_ms=1427 referee_ms=6384 total_ms=15761 hide=3 keep=8 unsure=0 referee_queue=4 backend=CPU degraded=false doctype=Tax_Invoice
+09-12 15:37:59.533 W/BlackoutLlm( 6724): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:39:35.020 W/BlackoutLlm( 6724): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:42:33.478 I/BlackoutStats( 6724): spans=141 ocr_ms=548 workhorse_ms=89835 summary_ms=2446 referee_ms=174627 total_ms=266908 hide=120 keep=21 unsure=0 referee_queue=130 backend=CPU degraded=false doctype=Bank_account_details_list
+09-12 15:42:48.499 W/BlackoutLlm( 8357): Qwen3-0.6B-int4 unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:43:43.946 W/BlackoutLlm( 8357): Gemma-4-E2B-it unusable on GPU: Failed to call nativeSendMessage: UNKNOWN: UNKNOWN: Can not find OpenCL library on this device
+09-12 15:44:36.009 I/BlackoutStats( 8357): spans=87 ocr_ms=392 workhorse_ms=49450 summary_ms=1549 referee_ms=49144 total_ms=100143 hide=21 keep=66 unsure=0 referee_queue=39 backend=CPU degraded=false doctype=Bank_transaction_statement

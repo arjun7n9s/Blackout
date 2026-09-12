@@ -1,0 +1,2 @@
+--------- beginning of main
+09-12 15:35:40.540  5556  5556 I BlackoutStats: spans=11 ocr_ms=150 workhorse_ms=7950 summary_ms=1427 referee_ms=6384 total_ms=15761 hide=3 keep=8 unsure=0 referee_queue=4 backend=CPU degraded=false doctype=Tax_Invoice
