@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches BlackoutInk in ui/theme/Color.kt so there is no white flash on cold start. -->
+    <color name="ink">#FF08080C</color>
+    <color name="ic_launcher_background">#FF5B4BD6</color>
+</resources>

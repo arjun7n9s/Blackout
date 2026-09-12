@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Blackout mark: three lines of "text" where the middle one has been redacted.
+  All geometry stays inside the 66dp adaptive-icon safe circle (centre 54,54 / radius 33).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- top text line -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.93"
+        android:pathData="M30,40 h34 a3,3 0 0 1 0,6 h-34 a3,3 0 0 1 0,-6 z" />
+
+    <!-- the redaction bar -->
+    <path
+        android:fillColor="#0A0A0E"
+        android:pathData="M28,52 h52 a6,6 0 0 1 0,12 h-52 a6,6 0 0 1 0,-12 z" />
+
+    <!-- bottom text line -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.93"
+        android:pathData="M30,68 h26 a3,3 0 0 1 0,6 h-26 a3,3 0 0 1 0,-6 z" />
+
+</vector>

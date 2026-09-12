@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- evenOdd so the lens punches a hole in the body instead of filling over it -->
+    <path
+        android:fillColor="@android:color/white"
+        android:fillType="evenOdd"
+        android:pathData="M9,3 L7.2,5 L4,5 A2,2 0 0 0 2,7 L2,18 A2,2 0 0 0 4,20 L20,20 A2,2 0 0 0 22,18 L22,7 A2,2 0 0 0 20,5 L16.8,5 L15,3 Z M12,8.2 A4.3,4.3 0 1 1 12,16.8 A4.3,4.3 0 1 1 12,8.2 Z" />
+</vector>

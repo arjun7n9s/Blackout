@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Blackout</string>
+
+    <string name="tagline">Redact before you share</string>
+    <string name="home_blurb">Capture a document or screenshot, then black out anything you don\'t want seen.</string>
+
+    <string name="take_photo">Take photo</string>
+    <string name="pick_from_gallery">Pick from gallery</string>
+    <string name="retake">Retake</string>
+    <string name="use_photo">Use photo</string>
+    <string name="close">Close</string>
+    <string name="capture">Capture</string>
+    <string name="switch_camera">Switch camera</string>
+
+    <string name="perm_title">Camera access needed</string>
+    <string name="perm_rationale">Blackout uses the camera to capture the image you want to redact. Nothing leaves your device.</string>
+    <string name="perm_denied_permanently">Camera permission is turned off. Enable it in Settings to take photos.</string>
+    <string name="perm_grant">Grant permission</string>
+    <string name="perm_open_settings">Open settings</string>
+
+    <string name="capture_failed">Couldn\'t capture the photo. Try again.</string>
+    <string name="camera_failed">Couldn\'t start the camera.</string>
+    <string name="load_failed">Couldn\'t load that image.</string>
+    <string name="v0_notice">Redaction lands in the next build — v0 stops at capture.</string>
+</resources>
