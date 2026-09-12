@@ -119,8 +119,27 @@ object MergePolicy {
      * signal*, not a judgement - those spans go to the referee. Small batches are exempt because
      * three lines genuinely can all be sensitive.
      */
-    fun isModeCollapsed(actions: Collection<Action>, minBatch: Int = 4): Boolean =
-        actions.size >= minBatch && actions.distinct().size == 1
+    fun isModeCollapsed(actions: Collection<Action>, minBatch: Int = 4): Boolean {
+        if (actions.size < minBatch) return false
+        if (actions.distinct().size == 1) return true
+        // Near-uniform counts too. Requiring *every* verdict to match let the real failure
+        // through: over a bank statement the workhorse answered "A B D E F H I J" - eight of ten
+        // lines hidden, including a heading, two transaction dates and footer boilerplate. That
+        // is the same degenerate decoding wearing two keeps as a disguise, and on the user's own
+        // documents it blacked out 21 of 25 spans.
+        val hides = actions.count { it == Action.HIDE }
+        return hides >= actions.size * COLLAPSE_RATIO
+    }
+
+    /**
+     * Share of a batch that must be HIDE before the answer is treated as decoding noise.
+     *
+     * A genuinely dense page exists - an Aadhaar card really is mostly private - but those lines
+     * are what the deterministic detectors and the layout pass already catch at full precision.
+     * What this threshold protects is the opposite case: an ordinary page where the model has
+     * stopped reading and started repeating.
+     */
+    const val COLLAPSE_RATIO = 0.8
 
     /**
      * The spans that actually get painted over.

@@ -275,21 +275,48 @@ class GpuLlmCascadeStage(
                 return@forEachIndexed
             }
 
-            val local = if (json) {
-                DecisionParser.parse(reply, batch.localIds, DecisionSource.WORKHORSE)
+            fun parse(text: String) = if (json) {
+                DecisionParser.parse(text, batch.localIds, DecisionSource.WORKHORSE)
             } else {
-                HideListParser.parse(reply, batch.localIds, DecisionSource.WORKHORSE)
+                HideListParser.parse(text, batch.localIds, DecisionSource.WORKHORSE)
             }
+
+            var local = parse(reply)
+
+            // A batch that hid almost everything told us about its own decoding, not about the
+            // document. Ask once more with the question inverted - the same prompt would decode
+            // to the same answer - and only then give up on it.
+            if (MergePolicy.isModeCollapsed(local.values.map { it.action })) {
+                Log.w(TAG, "batch ${index + 1} mode-collapsed; re-asking")
+                val second = runCatching {
+                    runtime.generate(
+                        system = if (json) Prompts.WORKHORSE_SYSTEM else Prompts.WORKHORSE_SYSTEM_RETRY,
+                        prompt = batch.prompt,
+                        schema = if (json) Prompts.decisionSchema(batchSpans.size) else null,
+                        maxOutputTokens = if (json) ModelCatalog.QWEN.maxOutputTokens else 48,
+                    )
+                }.getOrNull()
+
+                val retried = second?.let { parse(it) }.orEmpty()
+                if (retried.isNotEmpty() &&
+                    !MergePolicy.isModeCollapsed(retried.values.map { it.action })
+                ) {
+                    Log.i(TAG, "batch ${index + 1} recovered on retry")
+                    local = retried
+                } else {
+                    // Twice degenerate. Applying it would black out the page for no reason, so
+                    // the model simply does not get a vote on these spans - the deterministic
+                    // detectors and the layout pass already cover them at full precision, and
+                    // anything they did not claim stays readable.
+                    Log.w(TAG, "batch ${index + 1} collapsed twice; discarding ${batchSpans.size} spans")
+                    batchSpans.forEach { lowConfidence += it.id }
+                    return@forEachIndexed
+                }
+            }
+
             for ((localId, decision) in local) {
                 val globalId = batch.localToGlobal[localId] ?: continue
                 out[globalId] = decision.copy(id = globalId)
-            }
-
-            // A batch that answered identically for every line told us about its own decoding,
-            // not about the document. Send it to the referee instead of trusting it.
-            if (MergePolicy.isModeCollapsed(local.values.map { it.action })) {
-                Log.w(TAG, "batch ${index + 1} mode-collapsed; escalating ${batchSpans.size} spans")
-                batchSpans.forEach { lowConfidence += it.id }
             }
         }
 

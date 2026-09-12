@@ -115,6 +115,27 @@ object Prompts {
         If nothing should be hidden reply exactly: none
     """.trimIndent()
 
+    /**
+     * Second attempt at a batch whose first answer was degenerate.
+     *
+     * Deliberately not "the same prompt again": greedy decoding would reproduce the same reply
+     * token for token. The framing is inverted - name what survives rather than what goes - which
+     * is a different enough question to break the repetition, and it pushes back on the specific
+     * failure, a model that has stopped reading and is listing every letter it was given.
+     */
+    val WORKHORSE_SYSTEM_RETRY = """
+        You are checking which lines of a document are truly private.
+        Almost all lines are ordinary and must be kept: headings, labels, captions, company names,
+        boilerplate, transaction dates, statement periods, column titles.
+        Only these are private: a person's name, a postal address, a phone number, an email, an
+        ID number (Aadhaar/PAN/passport), a card or account number, a date of birth, medical
+        details, a salary or an account balance.
+        Each line is tagged with a capital letter.
+        Reply with ONLY the letters of the genuinely private lines, separated by spaces.
+        Most pages have very few. If none are private reply exactly: none
+        Never reply with numbers or with text copied from the document.
+    """.trimIndent()
+
     val REFEREE_SYSTEM = """
         You are a privacy reviewer settling ambiguous redaction calls.
         A smaller model was unsure about these lines, or disagreed with a pattern match.

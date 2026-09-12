@@ -154,6 +154,23 @@ class MergePolicyTest {
         assertFalse(MergePolicy.isModeCollapsed(List(3) { Action.HIDE }))
         assertFalse(MergePolicy.isModeCollapsed(listOf(Action.HIDE, Action.KEEP, Action.HIDE, Action.HIDE)))
 
+        // Near-uniform counts too. Verbatim from the device: asked about ten lines of a bank
+        // statement the workhorse replied "A B D E F H I J" - eight hidden, among them a heading,
+        // two transaction dates and footer boilerplate. Requiring every verdict to match let this
+        // through as a considered answer, and on real documents it blacked out 21 of 25 spans.
+        val eightOfTen = List(8) { Action.HIDE } + List(2) { Action.KEEP }
+        assertTrue(MergePolicy.isModeCollapsed(eightOfTen))
+
+        // A page that is genuinely mostly private is still allowed to say so, as long as it is
+        // discriminating about it.
+        val sixOfTen = List(6) { Action.HIDE } + List(4) { Action.KEEP }
+        assertFalse(MergePolicy.isModeCollapsed(sixOfTen))
+
+        // The ratio is about HIDE specifically - an all-but-one KEEP batch is not a page being
+        // blacked out, so it only trips the uniform rule.
+        val eightKeeps = List(8) { Action.KEEP } + List(2) { Action.HIDE }
+        assertFalse(MergePolicy.isModeCollapsed(eightKeeps))
+
         val queue = MergePolicy.refereeQueue(
             spans = spans,
             workhorse = mapOf(1 to decision(1, Action.HIDE)),
