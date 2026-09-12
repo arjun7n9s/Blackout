@@ -243,3 +243,49 @@ Documented gotchas that cost time here, so they cost nobody else any:
 - The app must be installed **before** pushing models; the target dir is created at install time
 - `abiFilters` is arm64-only, so x86_64 emulators fail with `INSTALL_FAILED_NO_MATCHING_ABIS`
 - vivo/iQOO/Xiaomi need "USB debugging (Security settings)" plus a reboot
+
+---
+
+## 2026-09-12 · Session 5 — teammate briefs (B soak, C edge cases)
+
+Added self-contained agent prompts so B and C can run their own iQOO 15 loaners against the same
+build without owning architecture.
+
+| File | Role |
+|---|---|
+| `B-instructions.md` | soak & regression — 10 doc types × 3 passes, failure taxonomy |
+| `C-instructions.md` | edge cases & A/B — hostile inputs, does the referee earn its cost |
+| `B-Outputs/`, `C-Outputs/` | README stubs defining the exact artifact schemas |
+
+### One code change, to make the output contracts achievable
+
+B's `timings.csv` and C's `compare.csv` originally required reading numbers off a screenshot of
+the debug panel — the stats only existed in the UI. Added a single machine-parseable log line per
+analysed image (`RedactViewModel.logStats`, tag `BlackoutStats`):
+
+```
+spans=47 ocr_ms=194 workhorse_ms=16331 summary_ms=826 referee_ms=18326 total_ms=35483
+hide=30 keep=17 unsure=0 referee_queue=21 backend=CPU degraded=false doctype=Bank_statement
+```
+
+`adb logcat -d -s BlackoutStats` now fills both CSVs directly. Writing the briefs is what exposed
+that the instructions would otherwise have been impractical.
+
+### Verified the A/B protocol before prescribing it
+
+There is no in-app model toggle, so C's comparison needed a real mechanism. Moving weights aside
+on device works, and all three modes were confirmed on the same statement:
+
+| Mode | hide | keep | referee_queue | total_ms |
+|---|---|---|---|---|
+| full | 30 | 17 | 21 | 35 483 |
+| workhorse (gemma moved aside) | 27 | 20 | 0 | 16 882 |
+| degraded (both moved aside) | — | — | — | regex only, HUD turns red |
+
+The workhorse-only run is measurably worse *and* differently wrong — it left an IFSC value visible
+and blacked more labels — which is exactly the comparison C is being asked to quantify.
+
+Also pinned down two things so C doesn't chase ghosts: **haptics exist** (heavy tick when a pass
+lands, light tick on span toggle), **voice does not** in this build; and the OCR model is ML Kit
+**Latin**, so Devanagari is expected to fail — C is asked to quantify how badly rather than file
+it as a bug.

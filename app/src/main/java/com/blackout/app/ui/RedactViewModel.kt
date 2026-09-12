@@ -2,6 +2,7 @@ package com.blackout.app.ui
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.blackout.app.intelligence.Action
@@ -116,6 +117,7 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
             userOverrides = emptyMap(),
             degraded = analysis.degraded,
         )
+        logStats(spans, analysis, decisions)
         _state.update {
             it.copy(
                 phase = Phase.READY,
@@ -126,6 +128,36 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
                 hiddenIds = MergePolicy.hiddenIds(decisions),
             )
         }
+    }
+
+    /**
+     * One machine-parseable line per analysed image.
+     *
+     * Exists so soak/regression runs can build timings.csv straight from `adb logcat` instead of
+     * screenshotting the debug panel and reading numbers off pixels. Key=value, space separated,
+     * no spaces inside values (doctype is underscored) so it survives a naive split.
+     *
+     *   adb logcat -d -s BlackoutStats
+     */
+    private fun logStats(
+        spans: List<TextSpan>,
+        analysis: AnalysisResult,
+        decisions: Map<Int, SpanDecision>,
+    ) {
+        fun ms(label: String) = analysis.stats.firstOrNull { it.label == label }?.elapsedMs ?: 0L
+        val backend = analysis.stats.firstOrNull()?.backend ?: "none"
+        val doctype = analysis.docSummary?.replace(' ', '_')?.take(40) ?: "-"
+        Log.i(
+            STATS_TAG,
+            "spans=${spans.size} ocr_ms=${_state.value.ocrMs} " +
+                "workhorse_ms=${ms("workhorse")} summary_ms=${ms("doc-summary")} " +
+                "referee_ms=${ms("referee")} total_ms=${analysis.totalMs} " +
+                "hide=${decisions.values.count { it.action == Action.HIDE }} " +
+                "keep=${decisions.values.count { it.action == Action.KEEP }} " +
+                "unsure=${decisions.values.count { it.action == Action.UNSURE }} " +
+                "referee_queue=${analysis.referee.size} backend=$backend " +
+                "degraded=${analysis.degraded} doctype=$doctype",
+        )
     }
 
     /** Flip one span. This is the uncensor / manual-hide gesture. */
@@ -164,6 +196,10 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
     fun reset() {
         original = null
         _state.value = RedactUiState()
+    }
+
+    private companion object {
+        const val STATS_TAG = "BlackoutStats"
     }
 
     override fun onCleared() {
