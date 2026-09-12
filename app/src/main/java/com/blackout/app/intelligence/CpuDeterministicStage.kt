@@ -62,6 +62,11 @@ object CpuDeterministicStage {
         if (spans.isEmpty()) return Result.Empty
         val out = LinkedHashMap<Int, SpanDecision>()
 
+        // Postal address runs, plus the name line above them. Computed over the whole page
+        // because the evidence is the *run*, not any single line - "VIC Flet No 25" only reads
+        // as an address because it sits between "CO:" and "PO:".
+        val addressIds = PiiBlocks.addressBlock(spans)
+
         for (span in spans) {
             if (span.isBlank) continue
             val spanHints = hints[span.id].orEmpty()
@@ -77,6 +82,25 @@ object CpuDeterministicStage {
             if (identifier != null) {
                 out[span.id] = SpanDecision(
                     span.id, Action.HIDE, DecisionSource.DETERMINISTIC, "regex: ${identifier.label}",
+                )
+                continue
+            }
+
+            // Label and value sharing one OCR line, e.g. "State: New Delhi". The span is a
+            // value even though it carries its own caption, and the two cannot be separated
+            // without word-level boxes, so the line goes.
+            val inline = PiiBlocks.inlineField(span.text)
+            if (inline != null && PiiBlocks.isSensitiveLabel(inline.label)) {
+                out[span.id] = SpanDecision(
+                    span.id, Action.HIDE, DecisionSource.DETERMINISTIC,
+                    "inline field '${inline.label}'",
+                )
+                continue
+            }
+
+            if (span.id in addressIds) {
+                out[span.id] = SpanDecision(
+                    span.id, Action.HIDE, DecisionSource.DETERMINISTIC, "address block",
                 )
                 continue
             }

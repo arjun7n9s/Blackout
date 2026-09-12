@@ -17,7 +17,7 @@ import re
 import sys
 from collections import Counter
 
-LINE = re.compile(r"id=(\d+)\s+action=(\w+)\s+src=(\w+)\s+x=(-?\d+)\s+y=(-?\d+)\s+text=(.*)$")
+LINE = re.compile(r"id=(\d+)\s+action=(\w+)\s+src=(\w+)\s+x=(-?\d+)\s+y=(-?\d+)(?:\s+ang=\S+)?\s+text=(.*)$")
 
 
 def norm(s: str) -> str:
