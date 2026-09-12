@@ -92,12 +92,14 @@ in the HUD.
 ### Backend: NPU → GPU → CPU, proven by warm-up
 
 `LiteRtLlmRuntime` tries **NPU, then GPU, then CPU**. Each candidate must complete a one-token
-warm-up generation before it is committed. The HUD prints whatever actually sampled
-(`on-device · local models · GPU` today; `· NPU` only after NPU warm-up succeeded). Mixed cascades
-show as `NPU+CPU`.
+warm-up generation before it is committed. **Warm-up success is not enough for NPU:** LiteRT-LM
+can log `Unsupported dispatch runtime version`, fall through to XNNPACK, and still return OK.
+We only *construct* `Backend.NPU` when dispatch is on disk **and** either an SoC AOT pack or a
+complete JIT set (`libLiteRtCompilerPlugin_Qualcomm.so` + `libQnnIr.so` + `libQnnSaver.so` +
+`libQnnHtpPrepare.so`) is present. A dispatch-only drop-in is refused so the HUD cannot say
+NPU for CPU.
 
-On the iQOO 15 (2026-09-12) it lands on **GPU**. NPU is skipped, not failed-over after a crash.
-That is a measured outcome, not a HUD lie.
+On the iQOO 15 (2026-09-12, second pass) the HUD is **`on-device · local models · GPU`**.
 
 #### What this phone actually is
 
@@ -113,78 +115,85 @@ binaries; loading `*_qualcomm_sm8750.litertlm` on SM8850 is the wrong blob.
 | File | SoC | Usable as |
 |---|---|---|
 | `qwen3_0.6b_q4_block32_ekv1280.litertlm` | generic CPU/GPU | workhorse (what we ship) |
-| Qwen3-0.6B Qualcomm pack | **none published** | — |
+| Qwen3-0.6B Qualcomm pack | **none published** (`litert-community/Qwen3-0.6B` and `Qwen3-0.6B-int4` listed) | — |
 | `gemma-4-E2B-it.litertlm` | generic CPU/GPU | referee (what we ship) |
 | `gemma-4-E2B-it_qualcomm_sm8750.litertlm` | SM8750 | **not this phone** |
 | `gemma-4-E2B-it_qualcomm_qcs8275.litertlm` | QCS8275 | **not this phone** |
-| `Gemma3-1B-IT_q4_ekv1280_sm8850.litertlm` | SM8850 | different model, gated Gemma 3 |
+| `Gemma3-1B-IT_q4_ekv1280_sm8850.litertlm` (662 MB) | SM8850 | **gated** (`401 GatedRepo`) — not swapped in |
 
-There is **no** Qwen3-0.6B Qualcomm pack and **no** Gemma-4-E2B SM8850 pack. Official LiteRT-LM
-NPU docs only list Gemma3-1B for SM8750/SM8650/SM8550 on Qualcomm, plus the SM8850 Gemma3-1B
-file above. We do not swap the referee to Gemma3-1B in this build (gated weights, different
-prompts, quality unknown). When an `…_qualcomm_sm8850.litertlm` for *our* filenames lands in
-`files/models/`, `ModelCatalog.locateNpu` will pick it up automatically.
+#### Runtime libraries (checked 2026-09-12)
 
-#### Runtime libraries
+`litertlm-android:0.17.0` ships **only** `liblitertlm_jni.so`. Its LiteRT pin is
+`LITERT_REF=9fe5be45564c868408e6514c8aabb83e211a0911` (LiteRT-LM `v0.17.0` WORKSPACE,
+updated 2026-08-27).
 
-`litertlm-android:0.17.0` ships **only** `liblitertlm_jni.so`. `Backend.NPU(nativeLibraryDir)`
-needs `libLiteRtDispatch_Qualcomm.so` in that directory. Without it, initialize SIGABRTs
-(`No usable Dispatch runtime found`) — uncatchable from Kotlin — so we **never construct
-Backend.NPU** unless that file is present.
+| Artifact | Result |
+|---|---|
+| `litert_npu_runtime_libraries_jit.zip` **v2.2.0** (sha256 `d6d16010…`) | Gradle stubs only. **No** `libLiteRtDispatch_Qualcomm.so`. |
+| Same zip **v2.1.6** | Contains dispatch + compiler plugin for v81. |
+| Dropping the v2.1.6 `.so` into this 0.17.0 app | Dispatch **loads**, then `litert_dispatch.cc:187 Unsupported dispatch runtime version`. Plugin `dlopen` fails (`libQnnIr.so not found`). `initialize()` + 1-token warm-up **succeed**. HUD said `NPU`. Workhorse 30971 ms (slower than GPU). **This was a silent XNNPACK fallback — we unshipped those `.so` files so the HUD cannot lie.** |
+| QAIRT 2.47.0.260601 community zip | `403 Forbidden` from Qualcomm software center (no login). Blocks `libQnnHtpPrepare.so` / `libQnnIr.so` / `libQnnSaver.so`. |
+| Device vendor | Hexagon v81 `libQnnHtp.so` + V81 stub/skel + `libQnnSystem.so` + `libcdsprpc.so`. **No** `libQnnHtpPrepare.so`. |
+| Open request | [LiteRT #6889](https://github.com/google-ai-edge/LiteRT/issues/6889) (open, last ping 2026-09-03): publish ABI-matched dispatch next to each `litertlm-android` AAR. |
 
-The phone *does* have Hexagon v81 QNN in vendor:
+Official enable path (Linux/macOS + NDK; **Windows is “coming soon”** on the Qualcomm LiteRT page):
 
+```bash
+# match the AAR, not HEAD
+git clone https://github.com/google-ai-edge/LiteRT-LM
+git -C LiteRT-LM checkout v0.17.0
+bazel build --config=android_arm64 \
+  @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so
 ```
-/vendor/lib64/hw/libQnnHtp.so
-/vendor/lib64/hw/libQnnHtpV81Stub.so
-/vendor/lib64/hw/libQnnHtpV81Skel.so
-/vendor/lib64/hw/libQnnSystem.so
-/vendor/lib64/libcdsprpc.so
-```
 
-No `libQnnHtpPrepare.so` (needed for on-device JIT) and no Google dispatch `.so`. Manifest
-declares the vendor libs with `required=false` so a future dispatch drop-in can dlopen them.
-
-To enable NPU later (do **not** bake 2.5 GB into the APK):
-
-1. Build `libLiteRtDispatch_Qualcomm.so` from the LiteRT revision that matches this AAR
-   (`bazel build --config=android_arm64 @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so`
-   — Linux/macOS + NDK r28b; ABI must match the AAR or dispatch init fails).
-2. Copy it to `app/src/main/jniLibs/arm64-v8a/` and rebuild.
-   `android.packaging.jniLibs.useLegacyPackaging = true` is already set so the `.so` is
-   extracted to `nativeLibraryDir`.
-3. Push SoC-matched weights next to the generic ones:
+Copy the resulting `libLiteRtDispatch_Qualcomm.so` (and, for JIT, the compiler plugin + QAIRT
+`libQnnIr.so` `libQnnSaver.so` `libQnnHtpPrepare.so` from SDK 2.47) into
+`app/src/main/jniLibs/arm64-v8a/` (gitignored; Qualcomm license). Rebuild. Then either:
 
 ```bash
 adb push qwen3_0.6b_q4_block32_ekv1280_qualcomm_sm8850.litertlm \
   /sdcard/Android/data/com.blackout.app/files/models/
-adb push gemma-4-E2B-it_qualcomm_sm8850.litertlm \
-  /sdcard/Android/data/com.blackout.app/files/models/
 ```
 
-4. Confirm HUD / `adb logcat -s BlackoutLlm` shows `loaded on NPU` after warm-up, not after
-   `initialize()` alone.
+or rely on JIT of the generic file **only if** `logcat` shows
+`1 compiler plugins were applied successfully` and
+`Replacing N out of N node(s) with delegate (DispatchDelegate)` — never trust `loaded on NPU`
+alone.
 
-Until those two artifacts exist, `BlackoutLlm` logs
-`NPU skipped for …: no libLiteRtDispatch_Qualcomm.so in …` and the cascade stays on GPU/CPU.
+**Ask list (organizers / Google / Qualcomm)**
 
-Official refs (do not use blog SoC slugs):
-- LiteRT-LM Android NPU: https://ai.google.dev/edge/litert-lm/android
-- Hugging Face `litert-community` Qwen3-0.6B-int4 (generic only):
-  https://huggingface.co/litert-community/Qwen3-0.6B
-- Gemma-4-E2B Qualcomm packs (`sm8750`, `qcs8275` — **not** `sm8850`):
-  https://huggingface.co/litert-community/Gemma-4-E2B
+1. Ship `libLiteRtDispatch_Qualcomm.so` ABI-matched to `litertlm-android:0.17.0` (LiteRT #6889).
+2. Restore the `.so` files in `litert_npu_runtime_libraries_jit.zip` for 2.2.0+ (present in 2.1.6, gone in 2.2.0).
+3. Publish `*_qualcomm_sm8850.litertlm` for Qwen3-0.6B and Gemma-4-E2B.
+4. If swapping workhorse is acceptable: HuggingFace access to gated `Gemma3-1B-IT_q4_ekv1280_sm8850.litertlm`.
+5. QAIRT 2.47 community zip (or redistributable `libQnnHtpPrepare.so` + `libQnnIr.so` + `libQnnSaver.so`).
+
+Until then, `BlackoutLlm` logs `NPU skipped for …: no libLiteRtDispatch_Qualcomm.so` and the
+cascade stays on GPU/CPU.
+
+Official refs:
+- https://ai.google.dev/edge/litert-lm/android
+- https://developers.google.com/edge/litert/next/npu
+- https://developers.google.com/edge/litert/next/qualcomm (SM8850 listed; Windows SDK “coming soon”)
+- https://huggingface.co/litert-community/Qwen3-0.6B-int4
+- https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm
 
 Device paths:
 
 ```
 /sdcard/Android/data/com.blackout.app/files/models/     # side-loaded weights
 <apk>/lib/arm64/liblitertlm_jni.so                      # only JNI the AAR ships
-<apk>/lib/arm64/libLiteRtDispatch_Qualcomm.so           # missing; required for Backend.NPU
+app/src/main/jniLibs/arm64-v8a/*.so                     # local fetch; gitignored
 ```
 
 Kit-transfer of the 2.5 GB referee: USB `adb push` from the laptop, or copy into the same
 `files/models/` folder via Office Kit. Do **not** put `.litertlm` files in the APK.
+
+#### Referee queue cap
+
+Gemma is still GPU. `MergePolicy.REFEREE_QUEUE_CAP = 8`: leak-risk (missing decision, KEEP+STRONG,
+UNSURE) always goes; uncorroborated HIDE fills remaining slots. Labels never enter the queue
+(layout KEEP precision unchanged).
 
 #### GPU (this phone)
 
@@ -193,16 +202,19 @@ is what made GPU warm-up succeed on OriginOS. Before that, init succeeded and ge
 with `Can not find OpenCL library`. GPU is **not** faster than the previous CPU run on this
 fixture (~18 s Qwen / ~18.6 s Gemma referee either way).
 
-Measured 2026-09-12 on I2501, `testdoc-bank.png`, 47 spans:
+Measured 2026-09-12 on I2501, `testdoc-bank.png`, 47 spans (GPU, referee cap 8):
 
 ```
 NPU skipped for Qwen3-0.6B-int4: no libLiteRtDispatch_Qualcomm.so in …/lib/arm64
-Qwen3-0.6B-int4 loaded on GPU in 5708ms (qwen3_0.6b_q4_block32_ekv1280.litertlm)
-Gemma-4-E2B-it loaded on GPU in 7293ms (gemma-4-E2B-it.litertlm)
-spans=47 ocr_ms=174 workhorse_ms=18010 summary_ms=735 referee_ms=18640 total_ms=37385
-hide=14 keep=33 backend=GPU degraded=false
+Qwen3-0.6B-int4 loaded on GPU in 3294ms
+Gemma-4-E2B-it loaded on GPU in 2894ms
+spans=47 ocr_ms=180 workhorse_ms=18338 summary_ms=356 referee_ms=10109 total_ms=28803
+hide=16 keep=31 backend=GPU degraded=false referee_queue=8
 HUD: on-device · local models · GPU
+over-redaction 1/24 = 4.2% (layout KEEP intact)
 ```
+
+Referee before the cap on the same fixture/GPU was 12879–18640 ms at `referee_queue=14`. Cap cut wall time to 10109 ms. Leak-risk items still go; the leftover must-keep hide is still `19/08`.
 
 #### Phones B/C — Tejesh copy list (same iQOO 15 / SM8850)
 

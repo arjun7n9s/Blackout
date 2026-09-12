@@ -361,3 +361,25 @@ ML Kit datatransport was merging `INTERNET` into the APK; stripped with `tools:n
 
 Until Google ships a matching dispatch + SM8850 packs, phones A/B/C keep the generic CPU/GPU
 weights. HUD stays `GPU` (or `CPU`), never `NPU`.
+
+---
+
+## 2026-09-12 · Session 8 — NPU still blocked; referee queue capped
+
+Pushed session 7 (`c124170`). Then tried to actually unblock NPU.
+
+**Tried:** LiteRT `litert_npu_runtime_libraries_jit.zip` v2.1.6 Qualcomm v81 dispatch + compiler
+plugin, plus vendor QNN libs pulled from the phone, JIT of the generic Qwen file.
+
+**Measured lie:** `loaded on NPU in 1646ms` and HUD `on-device · local models · NPU`, but logcat
+said `Unsupported dispatch runtime version` (2.1.6 `.so` vs AAR 0.17.0 / LITERT_REF `9fe5be4`)
+and `dlopen failed: library libQnnIr.so not found`. Workhorse 30971 ms — slower than GPU.
+Unshipped those `.so` files. NPU is only attempted when an SoC AOT pack or a *complete* JIT
+dep set is present.
+
+**Still missing (urls/dates in ARCH.md):** ABI-matched dispatch, QAIRT 2.47 (403), SM8850 Qwen
+and Gemma-4 packs, gated Gemma3-1B SM8850.
+
+**Referee:** `REFEREE_QUEUE_CAP = 8`, leak-risk never dropped. GPU re-measure on the same
+fixture: `referee_queue=8` `referee_ms=10109` (was 12879–18640 at queue 14). Over-redaction
+still **1/24 = 4.2%**. HUD `on-device · local models · GPU`. No INTERNET in dumpsys.

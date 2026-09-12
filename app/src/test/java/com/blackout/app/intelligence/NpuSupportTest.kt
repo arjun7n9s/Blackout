@@ -49,6 +49,8 @@ class NpuSupportTest {
         val dir = kotlin.io.path.createTempDirectory("npu-support").toFile()
         File(dir, NpuSupport.DISPATCH_LIB).writeText("x")
         assertTrue(NpuSupport.dispatchPresent(dir))
+        assertFalse(NpuSupport.compilerPluginPresent(dir))
+        assertFalse(NpuSupport.jitDepsPresent(dir))
         dir.deleteRecursively()
     }
 }

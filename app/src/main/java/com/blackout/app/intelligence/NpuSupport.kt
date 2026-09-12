@@ -28,6 +28,8 @@ import java.io.File
 object NpuSupport {
 
     const val DISPATCH_LIB = "libLiteRtDispatch_Qualcomm.so"
+    const val COMPILER_PLUGIN_LIB = "libLiteRtCompilerPlugin_Qualcomm.so"
+    const val PREPARE_LIB = "libQnnHtpPrepare.so"
     const val TAG = "BlackoutLlm"
 
     /** `ro.soc.model`, lowercased, or null on API < 31. */
@@ -56,19 +58,60 @@ object NpuSupport {
     fun dispatchPresent(context: Context): Boolean =
         dispatchPresent(File(context.applicationInfo.nativeLibraryDir))
 
+    fun compilerPluginPresent(nativeLibraryDir: File): Boolean =
+        File(nativeLibraryDir, COMPILER_PLUGIN_LIB).isFile
+
+    fun compilerPluginPresent(context: Context): Boolean =
+        compilerPluginPresent(File(context.applicationInfo.nativeLibraryDir))
+
+    fun preparePresent(nativeLibraryDir: File): Boolean =
+        File(nativeLibraryDir, PREPARE_LIB).isFile
+
     /**
      * True only when it is *safe* to construct Backend.NPU. Missing dispatch → skip,
      * do not probe, because the probe itself can kill the process.
+     *
+     * A dispatch `.so` from an older LiteRT release (e.g. 2.1.6 against AAR 0.17.0)
+     * loads, then [litert_dispatch.cc] logs `Unsupported dispatch runtime version` and
+     * LiteRT-LM **silently runs XNNPACK**. initialize()+warm-up still succeed, so we
+     * must not treat "file exists" as "NPU is real". Only SoC AOT packs with a
+     * matching-ABI dispatch are attempted; JIT additionally needs [COMPILER_PLUGIN_LIB]
+     * plus QAIRT `libQnnIr.so` / `libQnnSaver.so` / [PREPARE_LIB] so the plugin can
+     * actually dlopen.
      */
     fun canAttemptNpu(context: Context): Boolean = dispatchPresent(context)
+
+    fun jitDepsPresent(nativeLibraryDir: File): Boolean =
+        compilerPluginPresent(nativeLibraryDir) &&
+            File(nativeLibraryDir, "libQnnIr.so").isFile &&
+            File(nativeLibraryDir, "libQnnSaver.so").isFile &&
+            preparePresent(nativeLibraryDir)
+
+    fun jitDepsPresent(context: Context): Boolean =
+        jitDepsPresent(File(context.applicationInfo.nativeLibraryDir))
+
+    /**
+     * Enqueue NPU only for a real AOT pack, or for JIT when every plugin dependency is
+     * on disk. A lone dispatch+plugin pair from LiteRT 2.1.6 is not enough — measured
+     * 2026-09-12 on SM8850 with litertlm-android 0.17.0.
+     */
+    fun willAttemptNpu(context: Context, npuFile: File?): Boolean {
+        if (!canAttemptNpu(context)) return false
+        if (npuFile != null) return true
+        return jitDepsPresent(context)
+    }
 
     fun skipReason(context: Context, npuFile: File?): String? {
         if (!dispatchPresent(context)) {
             return "no $DISPATCH_LIB in ${context.applicationInfo.nativeLibraryDir}"
         }
-        if (npuFile == null) {
+        if (npuFile == null && !compilerPluginPresent(context)) {
             val soc = socModel() ?: "unknown-soc"
-            return "no SoC-matched NPU weights for $soc"
+            return "no SoC-matched NPU weights for $soc and no $COMPILER_PLUGIN_LIB for JIT"
+        }
+        if (npuFile == null && !jitDepsPresent(context)) {
+            return "JIT plugin present but missing libQnnIr.so / libQnnSaver.so / $PREPARE_LIB (QAIRT); " +
+                "a dispatch-only drop-in silently falls back to CPU and must not be labelled NPU"
         }
         return null
     }

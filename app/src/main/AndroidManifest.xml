@@ -30,9 +30,8 @@
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Blackout">
 
-        <!-- Vendor libs GPU/NPU need to dlopen. required=false so the app still installs
-             on non-Qualcomm devices. Declaring libOpenCL.so is what made GPU warm-up
-             succeed on OriginOS; without it LiteRT could not find OpenCL. -->
+        <!-- Vendor / bundled QNN. required=false so install still works off Qualcomm.
+             Declaring libOpenCL.so is what made GPU warm-up succeed on OriginOS. -->
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
@@ -40,6 +39,9 @@
         <uses-native-library android:name="libQnnSystem.so" android:required="false" />
         <uses-native-library android:name="libQnnHtpV81Stub.so" android:required="false" />
         <uses-native-library android:name="libQnnHtpV81Skel.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpPrepare.so" android:required="false" />
+        <uses-native-library android:name="libQnnIr.so" android:required="false" />
+        <uses-native-library android:name="libQnnSaver.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

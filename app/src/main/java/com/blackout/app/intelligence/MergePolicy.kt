@@ -118,6 +118,13 @@ object MergePolicy {
         decisions.values.filter { it.action == Action.HIDE }.mapTo(LinkedHashSet()) { it.id }
 
     /**
+     * Hard cap on Gemma's queue. Dense pages previously sent 14+ spans (~13–19 s on GPU).
+     * Leak-risk items always go; possible false-positives fill remaining slots by document order.
+     * Layout KEEP is unchanged: labels never enter this queue.
+     */
+    const val REFEREE_QUEUE_CAP = 8
+
+    /**
      * The referee's work queue.
      *
      * Wider than just "unsure", because the two useful disagreement signals also belong here:
@@ -127,6 +134,10 @@ object MergePolicy {
      * Keeping hints out of the workhorse prompt is what makes this disagreement meaningful, and
      * it is also what structurally guarantees a hint is never the sole decision: a hint can only
      * ever escalate a span to a *model*, never redact it by itself.
+     *
+     * [maxSize] drops lowest-priority items (uncorroborated HIDE, then mode-collapse) so wall
+     * time stays bounded. Leak-risk (null / UNSURE / KEEP+STRONG) is never dropped, even if
+     * that exceeds [maxSize].
      */
     fun refereeQueue(
         spans: List<TextSpan>,
@@ -134,31 +145,40 @@ object MergePolicy {
         hints: Map<Int, List<CandidateHint>>,
         /** Spans from batches whose output looked degenerate - see [isModeCollapsed]. */
         lowConfidence: Set<Int> = emptySet(),
-    ): List<Int> = spans.mapNotNull { span ->
-        val decision = workhorse[span.id]
-        val spanHints = hints[span.id].orEmpty()
-        val strong = spanHints.any { it.strength == HintStrength.STRONG }
-        when {
-            // A label's verdict is already settled by layout, so refereeing it is pure cost -
-            // and on the fixture the referee was the thing wrongly hiding them. Note that labels
-            // are still sent to the *workhorse*: dropping them would destroy the label/value
-            // adjacency ReadingOrder exists to create, and leave batches of pure values that
-            // legitimately come back all-hide and trip isModeCollapsed.
-            span.role == SpanRole.LABEL -> null
-            span.id in lowConfidence -> span.id
-            // No usable answer at all. A 0.6B routinely returns `{"decisions":[]}` for a whole
-            // batch; treating that as "keep everything" is a silent, total failure of the
-            // redaction. Escalate instead - the referee is exactly the fallback for this.
-            decision == null -> span.id
-            decision.action == Action.UNSURE -> span.id
-            // Possible false negative: independent regex signal disagrees with "keep".
-            decision.action == Action.KEEP && strong -> span.id
-            // Possible false positive: "hide" with nothing corroborating it. This is how field
-            // labels ("Account Holder", "PAN") get blacked out - the workhorse tars them with the
-            // value beside them. Escalating keeps the referee arbitrating in BOTH directions
-            // rather than only ever adding redactions.
-            decision.action == Action.HIDE && spanHints.isEmpty() -> span.id
-            else -> null
+        maxSize: Int = REFEREE_QUEUE_CAP,
+    ): List<Int> {
+        data class Ranked(val id: Int, val priority: Int)
+        val ranked = spans.mapNotNull { span ->
+            val decision = workhorse[span.id]
+            val spanHints = hints[span.id].orEmpty()
+            val strong = spanHints.any { it.strength == HintStrength.STRONG }
+            val priority = when {
+                // A label's verdict is already settled by layout, so refereeing it is pure cost -
+                // and on the fixture the referee was the thing wrongly hiding them. Note that labels
+                // are still sent to the *workhorse*: dropping them would destroy the label/value
+                // adjacency ReadingOrder exists to create, and leave batches of pure values that
+                // legitimately come back all-hide and trip isModeCollapsed.
+                span.role == SpanRole.LABEL -> null
+                // No usable answer at all. A 0.6B routinely returns `{"decisions":[]}` for a whole
+                // batch; treating that as "keep everything" is a silent, total failure of the
+                // redaction. Escalate instead - the referee is exactly the fallback for this.
+                decision == null -> 0
+                decision.action == Action.KEEP && strong -> 1
+                decision.action == Action.UNSURE -> 2
+                span.id in lowConfidence -> 3
+                // Possible false positive: "hide" with nothing corroborating it. This is how field
+                // labels ("Account Holder", "PAN") get blacked out - the workhorse tars them with the
+                // value beside them. Escalating keeps the referee arbitrating in BOTH directions
+                // rather than only ever adding redactions.
+                decision.action == Action.HIDE && spanHints.isEmpty() -> 4
+                else -> null
+            } ?: return@mapNotNull null
+            Ranked(span.id, priority)
         }
+        val must = ranked.filter { it.priority <= 2 }
+        val optional = ranked.filter { it.priority > 2 }
+        val remaining = (maxSize - must.size).coerceAtLeast(0)
+        val chosen = (must + optional.take(remaining)).map { it.id }.toSet()
+        return ranked.filter { it.id in chosen }.map { it.id }
     }
 }

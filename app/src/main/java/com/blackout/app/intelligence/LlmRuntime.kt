@@ -32,8 +32,9 @@ interface LlmRuntime : AutoCloseable {
  * starting from a clean cache.
  *
  * **NPU → GPU → CPU**, each proven with a warm-up generation before commit. NPU is only
- * *attempted* when [NpuSupport.canAttemptNpu] is true (dispatch `.so` on disk) *and* a
- * SoC-matched weight file exists. Missing dispatch is not probed: `Backend.NPU` without
+ * *attempted* when [NpuSupport.willAttemptNpu] is true: dispatch `.so` on disk, plus either
+ * an SoC-matched AOT pack or the Qualcomm compiler plugin (JIT of the generic file).
+ * Missing dispatch is not probed: `Backend.NPU` without
  * `libLiteRtDispatch_Qualcomm.so` SIGABRTs the process. [backendLabel] is what actually
  * sampled, never what we hoped for.
  */
@@ -182,11 +183,14 @@ class LiteRtLlmRuntime(
         NpuSupport.logSkip(context, spec, npuWeights)
 
         val out = mutableListOf<BackendChoice>()
-        if (NpuSupport.canAttemptNpu(context) && npuWeights != null) {
+        if (NpuSupport.willAttemptNpu(context, npuWeights)) {
+            val npuFile = npuWeights ?: modelFile
+            val how = if (npuWeights != null) "AOT" else "JIT"
+            Log.i(TAG, "trying NPU ($how) for ${spec.displayName} with ${npuFile.name}")
             out += BackendChoice(
                 "NPU",
                 Backend.NPU(context.applicationInfo.nativeLibraryDir),
-                npuWeights,
+                npuFile,
             )
         }
         out += BackendChoice("GPU", Backend.GPU(), modelFile)

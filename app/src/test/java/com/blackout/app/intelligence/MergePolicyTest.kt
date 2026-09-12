@@ -219,4 +219,42 @@ class MergePolicyTest {
         // 3 abstained.
         assertEquals(listOf(2, 3), queue)
     }
+
+    @Test
+    fun `queue cap keeps leak-risk and drops extra uncorroborated hides`() {
+        val many = (1..12).map { span(it) }
+        val workhorse = many.associate { s ->
+            s.id to if (s.id <= 3) decision(s.id, Action.KEEP) else decision(s.id, Action.HIDE)
+        }
+        val hints = mapOf(
+            1 to listOf(CandidateHint(HintKind.PAN, "ABCDE1234F")),
+            2 to listOf(CandidateHint(HintKind.AADHAAR, "2345 6789 0123")),
+            3 to listOf(CandidateHint(HintKind.EMAIL, "a@b.com")),
+        )
+        val queue = MergePolicy.refereeQueue(
+            spans = many,
+            workhorse = workhorse,
+            hints = hints,
+            maxSize = 8,
+        )
+        assertTrue(queue.containsAll(listOf(1, 2, 3)))
+        assertEquals(8, queue.size)
+        assertFalse(12 in queue)
+    }
+
+    @Test
+    fun `leak-risk is never dropped even if it exceeds the cap`() {
+        val many = (1..10).map { span(it) }
+        val workhorse = many.associate { s -> s.id to decision(s.id, Action.KEEP) }
+        val hints = many.associate { s ->
+            s.id to listOf(CandidateHint(HintKind.PAN, "ABCDE1234F"))
+        }
+        val queue = MergePolicy.refereeQueue(
+            spans = many,
+            workhorse = workhorse,
+            hints = hints,
+            maxSize = 8,
+        )
+        assertEquals(10, queue.size)
+    }
 }
