@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.blackout.app.R
+import com.blackout.app.share.ShareGuard
 import com.blackout.app.intelligence.Action
 import com.blackout.app.redact.RedactionEngine
 
@@ -76,7 +77,7 @@ fun RedactScreen(
     val context = LocalContext.current
     val original = viewModel.original
     val image = remember(original) { original?.asImageBitmap() }
-    var pendingShareWarning by remember { mutableStateOf<String?>(null) }
+    var pendingShareWarning by remember { mutableStateOf<ShareGuard.Warning?>(null) }
 
     // One haptic when a pass lands and the bars appear.
     LaunchedEffect(state.phase) {
@@ -200,8 +201,17 @@ fun RedactScreen(
     pendingShareWarning?.let { warning ->
         AlertDialog(
             onDismissRequest = { pendingShareWarning = null },
-            title = { Text(stringResource(R.string.share_guard_title)) },
-            text = { Text(warning) },
+            title = {
+                Text(
+                    stringResource(
+                        when (warning.reason) {
+                            ShareGuard.Reason.SKEWED -> R.string.share_guard_skew_title
+                            ShareGuard.Reason.SPARSE_TEXT -> R.string.share_guard_title
+                        }
+                    )
+                )
+            },
+            text = { Text(warning.message) },
             confirmButton = {
                 TextButton(onClick = {
                     pendingShareWarning = null

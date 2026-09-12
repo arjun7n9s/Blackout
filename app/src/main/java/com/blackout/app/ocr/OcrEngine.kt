@@ -48,6 +48,7 @@ class MlKitOcrEngine : OcrEngine {
                             text = line.text,
                             rect = SpanRect(box.left, box.top, box.right, box.bottom),
                             confidence = line.confidence ?: 0f,
+                            angleDeg = line.angle,
                             blockIndex = blockIndex,
                             lineIndex = lineIndex,
                         )

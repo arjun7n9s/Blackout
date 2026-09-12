@@ -511,3 +511,38 @@ Nothing fails silently into "share the original".
   than pairing two-column boxes.
 - Bitmap lives in the ViewModel, so it won't survive process death. Portrait lock makes config
   changes moot for now.
+
+---
+
+## Tilted captures: the second silent-share hole
+
+`ShareGuard` originally returned early whenever `hideCount > 0`. That left a gap it was built to
+close: a tilted photograph still produces *some* bars, so the page looks processed and the
+sparse-text rule never fires.
+
+`TextSpan.angleDeg` carries ML Kit's `Text.Line.getAngle()`, and `SkewMetrics.medianAbsAngle()`
+folds it onto 0–90° (modulo 180, because text rotated a full 180° still runs along horizontal
+lines — it is *tilt* that breaks axis-aligned boxes, not being upside down).
+
+Measured on `tools/testdoc-bank.png` rotated by a known amount (iQOO 15, 2026-09-12):
+
+| capture | median angle | spans the CPU stage settled | median span height | hide |
+|---|---|---|---|---|
+| upright | ~0° | **28 / 47** | 22 px | 15 |
+| 12° | 11.9° | 19 / 47 | 65 px | 23 |
+| 30° | 30.0° | **8 / 47** | 123 px | 12 |
+| 90° | 90.0° | **6 / 49** | 198 px | 19 |
+
+ML Kit reports the angle accurately (11.6–12.0° on the 12° fixture, 29.7–30.2° on the 30°). Two
+things degrade together: the axis-aligned box around a slanted line inflates ~9× so bars become
+loose blocks, and OCR quality drops so the deterministic identifier regexes stop matching —
+the CPU stage settles 28 spans upright and 6 at 90°. Sensitive values simply stop being found
+while the page still looks redacted.
+
+`SkewMetrics.WARN_DEGREES = 8` sits above handheld jitter (~0° measured) and below the 12°
+fixture, which already costs a third of the deterministic detections. The guard is checked
+*before* the `hideCount` short-circuit, and `ShareGuard.Reason` lets the dialog pick an honest
+headline — "This page looks tilted" rather than the C-005 "Almost no text was read".
+
+This is a warning, not a fix. Deskew/OSD before OCR (C-006 / C-010 / C-016) remains the real
+answer; this stops the page leaving silently in the meantime.

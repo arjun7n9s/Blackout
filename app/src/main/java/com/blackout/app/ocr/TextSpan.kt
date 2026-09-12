@@ -66,6 +66,13 @@ data class TextSpan(
     val role: SpanRole = SpanRole.STANDALONE,
     /** For a [SpanRole.VALUE], the text of the label it was paired with. Prompt context. */
     val labelText: String? = null,
+    /**
+     * Rotation of this line in degrees, straight from ML Kit (`Text.Line.getAngle()`).
+     *
+     * [rect] is axis-aligned, so on a rotated capture it is a loose box around slanted glyphs.
+     * This is how we notice that and warn, rather than shipping a page that merely looks redacted.
+     */
+    val angleDeg: Float = 0f,
 ) {
     val isBlank: Boolean get() = text.isBlank()
 }

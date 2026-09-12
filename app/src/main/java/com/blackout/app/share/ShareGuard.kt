@@ -36,17 +36,52 @@ object ShareGuard {
     /** Small images are thumbnails and crops; the density test is meaningless on them. */
     private const val MIN_MEGAPIXELS = 0.3f
 
+    /** Mirrors [com.blackout.app.ocr.SkewMetrics.WARN_DEGREES]; kept local so this stays pure. */
+    const val SKEW_WARN_DEGREES = 8f
+
+    /** Which check fired. The UI picks a matching headline; the body explains the specifics. */
+    enum class Reason { SPARSE_TEXT, SKEWED }
+
+    data class Warning(val reason: Reason, val message: String)
+
     /**
+     * @param medianSkewDeg deviation from horizontal, 0..90 - see [com.blackout.app.ocr.SkewMetrics]
      * @return null when sharing is unremarkable, otherwise the reason to put in front of the user.
      */
-    fun warning(spanCount: Int, hideCount: Int, imageWidth: Int, imageHeight: Int): String? {
+    fun warning(
+        spanCount: Int,
+        hideCount: Int,
+        imageWidth: Int,
+        imageHeight: Int,
+        medianSkewDeg: Float = 0f,
+    ): Warning? {
+        // Checked BEFORE the hideCount short-circuit, and that ordering is the whole point.
+        //
+        // A tilted page still produces some bars, so it looks processed and the sparse-text rule
+        // below never fires. But measured on the rotated fixture, the CPU stage settles 28 spans
+        // upright and only 8 at 30 degrees - OCR degrades, the identifier regexes stop matching,
+        // and sensitive values quietly stop being found. That is a page that looks redacted and
+        // is not, which is exactly the failure this object exists to prevent.
+        if (medianSkewDeg >= SKEW_WARN_DEGREES) {
+            return Warning(
+                Reason.SKEWED,
+                "This page looks rotated about ${medianSkewDeg.toInt()}°. Text at an angle is " +
+                    "read less reliably, so some details may not have been found or covered. " +
+                    "Retaking it straight-on is safer.",
+            )
+        }
+
         if (hideCount > 0) return null
         val megapixels = imageWidth.toFloat() * imageHeight / 1_000_000f
         if (megapixels < MIN_MEGAPIXELS) return null
         if (spanCount / megapixels >= MIN_SPANS_PER_MEGAPIXEL) return null
-        if (spanCount == 0) return "No text was recognised in this image, so nothing has been redacted."
-        val counted = if (spanCount == 1) "1 text region was" else "$spanCount text regions were"
-        return "Only $counted recognised in this image and nothing has been redacted. " +
-            "If the photo is blurred or at an angle, details may still be readable."
+        val message = if (spanCount == 0) {
+            "No text was recognised in this image, so nothing has been redacted."
+        } else {
+            val counted = if (spanCount == 1) "1 text region was" else "$spanCount text regions were"
+            "Only $counted recognised in this image and nothing has been redacted. " +
+                "If the photo is blurred or at an angle, details may still be readable."
+        }
+        return Warning(Reason.SPARSE_TEXT, message)
     }
 }

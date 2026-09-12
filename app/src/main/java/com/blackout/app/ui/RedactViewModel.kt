@@ -15,6 +15,7 @@ import com.blackout.app.intelligence.NpuGate
 import com.blackout.app.intelligence.SpanDecision
 import com.blackout.app.ocr.MlKitOcrEngine
 import com.blackout.app.ocr.OcrResult
+import com.blackout.app.ocr.SkewMetrics
 import com.blackout.app.ocr.TextSpan
 import com.blackout.app.redact.RedactionEngine
 import com.blackout.app.share.ShareGuard
@@ -48,15 +49,17 @@ data class RedactUiState(
     val unsureCount: Int get() = decisions.values.count { it.action == Action.UNSURE }
 
     /**
-     * Non-null when the page looks unread rather than clean - the C-005 motion-blur case. The UI
-     * makes the user confirm before this leaves the app.
+     * Non-null when the page looks unread rather than clean - the C-005 motion-blur case, or a
+     * tilted capture where bars exist but OCR quietly missed things. The UI makes the user confirm
+     * before either leaves the app.
      */
-    val shareWarning: String?
+    val shareWarning: ShareGuard.Warning?
         get() = if (phase != Phase.READY) null else ShareGuard.warning(
             spanCount = spans.size,
             hideCount = hideCount,
             imageWidth = imageWidth,
             imageHeight = imageHeight,
+            medianSkewDeg = SkewMetrics.medianAbsAngle(spans),
         )
 }
 
@@ -203,7 +206,8 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
                 Log.i(
                     SPANS_TAG,
                     "id=${span.id} action=${d.action} src=${d.source} " +
-                        "x=${span.rect.left} y=${span.rect.top} text=${span.text}",
+                        "x=${span.rect.left} y=${span.rect.top} " +
+                        "ang=${"%.1f".format(span.angleDeg)} text=${span.text}",
                 )
             }
         }
