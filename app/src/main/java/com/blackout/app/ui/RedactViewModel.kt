@@ -151,7 +151,7 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
         decisions: Map<Int, SpanDecision>,
     ) {
         fun ms(label: String) = analysis.stats.firstOrNull { it.label == label }?.elapsedMs ?: 0L
-        val backend = analysis.stats.firstOrNull()?.backend ?: "none"
+        val backend = analysis.hudBackend ?: "none"
         val doctype = analysis.docSummary?.replace(' ', '_')?.take(40) ?: "-"
         Log.i(
             STATS_TAG,

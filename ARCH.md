@@ -40,8 +40,9 @@ Camera / gallery / shared-in image
   share/        ACTION_SEND, redacted JPEG only
 ```
 
-**No network.** The app declares no `INTERNET` permission, so a cloud call on this path isn't
-merely absent by policy — the process cannot make one.
+**No network.** The app declares no `INTERNET` permission (and `tools:node="remove"`s the
+copy ML Kit datatransport / media3 would merge), so a cloud call on this path isn't merely
+absent by policy — the process cannot make one.
 
 ---
 
@@ -88,26 +89,134 @@ adb push gemma-4-E2B-it.litertlm               /sdcard/Android/data/com.blackout
 are not an error: the app runs the regex-only path and labels itself **degraded · patterns only**
 in the HUD.
 
-### Backend: CPU, and why not NPU or GPU
+### Backend: NPU → GPU → CPU, proven by warm-up
 
-`LiteRtLlmRuntime` tries **GPU → CPU** and reports what actually loaded.
+`LiteRtLlmRuntime` tries **NPU, then GPU, then CPU**. Each candidate must complete a one-token
+warm-up generation before it is committed. The HUD prints whatever actually sampled
+(`on-device · local models · GPU` today; `· NPU` only after NPU warm-up succeeded). Mixed cascades
+show as `NPU+CPU`.
 
-On the iQOO 15 it lands on **CPU**, for a reason worth recording:
+On the iQOO 15 (2026-09-12) it lands on **GPU**. NPU is skipped, not failed-over after a crash.
+That is a measured outcome, not a HUD lie.
 
-- **GPU initialises but cannot generate.** `Engine.initialize()` succeeds, then every
-  `sendMessage` fails with `Can not find OpenCL library on this device` — OriginOS doesn't expose
-  `libOpenCL.so` to apps. So `load()` spends one tiny **warm-up generation** proving a backend can
-  actually sample before committing to it. Trusting `initialize()` alone gave a silent
-  all-batches-fail run.
-- **NPU isn't available.** `litertlm-android` ships only `liblitertlm_jni.so` — not the Qualcomm
-  QNN libraries `Backend.NPU(nativeLibraryDir)` needs — and our weights are the generic CPU/GPU
-  builds, not the separate per-SoC NPU files (`..._qualcomm_sm8750.litertlm`).
+#### What this phone actually is
 
-The HUD therefore reads `on-device · local models · CPU`. It shows the real backend rather than
-claiming an NPU path the build can't take.
+```
+adb shell getprop ro.soc.model    # SM8850   Snapdragon 8 Elite Gen 5
+```
 
-Measured on device (47 spans, bank statement): OCR 201 ms · Qwen 5 batches ≈ 8.2 s ·
-Gemma summary ≈ 1.1 s · Gemma referee ≈ 1.7 s/span.
+Not SM8750 (that's the previous Elite). Qualcomm AOT `.litertlm` packs are per-SoC context
+binaries; loading `*_qualcomm_sm8750.litertlm` on SM8850 is the wrong blob.
+
+#### Weights that exist today (Hugging Face `litert-community`, 2026-09-12)
+
+| File | SoC | Usable as |
+|---|---|---|
+| `qwen3_0.6b_q4_block32_ekv1280.litertlm` | generic CPU/GPU | workhorse (what we ship) |
+| Qwen3-0.6B Qualcomm pack | **none published** | — |
+| `gemma-4-E2B-it.litertlm` | generic CPU/GPU | referee (what we ship) |
+| `gemma-4-E2B-it_qualcomm_sm8750.litertlm` | SM8750 | **not this phone** |
+| `gemma-4-E2B-it_qualcomm_qcs8275.litertlm` | QCS8275 | **not this phone** |
+| `Gemma3-1B-IT_q4_ekv1280_sm8850.litertlm` | SM8850 | different model, gated Gemma 3 |
+
+There is **no** Qwen3-0.6B Qualcomm pack and **no** Gemma-4-E2B SM8850 pack. Official LiteRT-LM
+NPU docs only list Gemma3-1B for SM8750/SM8650/SM8550 on Qualcomm, plus the SM8850 Gemma3-1B
+file above. We do not swap the referee to Gemma3-1B in this build (gated weights, different
+prompts, quality unknown). When an `…_qualcomm_sm8850.litertlm` for *our* filenames lands in
+`files/models/`, `ModelCatalog.locateNpu` will pick it up automatically.
+
+#### Runtime libraries
+
+`litertlm-android:0.17.0` ships **only** `liblitertlm_jni.so`. `Backend.NPU(nativeLibraryDir)`
+needs `libLiteRtDispatch_Qualcomm.so` in that directory. Without it, initialize SIGABRTs
+(`No usable Dispatch runtime found`) — uncatchable from Kotlin — so we **never construct
+Backend.NPU** unless that file is present.
+
+The phone *does* have Hexagon v81 QNN in vendor:
+
+```
+/vendor/lib64/hw/libQnnHtp.so
+/vendor/lib64/hw/libQnnHtpV81Stub.so
+/vendor/lib64/hw/libQnnHtpV81Skel.so
+/vendor/lib64/hw/libQnnSystem.so
+/vendor/lib64/libcdsprpc.so
+```
+
+No `libQnnHtpPrepare.so` (needed for on-device JIT) and no Google dispatch `.so`. Manifest
+declares the vendor libs with `required=false` so a future dispatch drop-in can dlopen them.
+
+To enable NPU later (do **not** bake 2.5 GB into the APK):
+
+1. Build `libLiteRtDispatch_Qualcomm.so` from the LiteRT revision that matches this AAR
+   (`bazel build --config=android_arm64 @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so`
+   — Linux/macOS + NDK r28b; ABI must match the AAR or dispatch init fails).
+2. Copy it to `app/src/main/jniLibs/arm64-v8a/` and rebuild.
+   `android.packaging.jniLibs.useLegacyPackaging = true` is already set so the `.so` is
+   extracted to `nativeLibraryDir`.
+3. Push SoC-matched weights next to the generic ones:
+
+```bash
+adb push qwen3_0.6b_q4_block32_ekv1280_qualcomm_sm8850.litertlm \
+  /sdcard/Android/data/com.blackout.app/files/models/
+adb push gemma-4-E2B-it_qualcomm_sm8850.litertlm \
+  /sdcard/Android/data/com.blackout.app/files/models/
+```
+
+4. Confirm HUD / `adb logcat -s BlackoutLlm` shows `loaded on NPU` after warm-up, not after
+   `initialize()` alone.
+
+Until those two artifacts exist, `BlackoutLlm` logs
+`NPU skipped for …: no libLiteRtDispatch_Qualcomm.so in …` and the cascade stays on GPU/CPU.
+
+Official refs (do not use blog SoC slugs):
+- LiteRT-LM Android NPU: https://ai.google.dev/edge/litert-lm/android
+- Hugging Face `litert-community` Qwen3-0.6B-int4 (generic only):
+  https://huggingface.co/litert-community/Qwen3-0.6B
+- Gemma-4-E2B Qualcomm packs (`sm8750`, `qcs8275` — **not** `sm8850`):
+  https://huggingface.co/litert-community/Gemma-4-E2B
+
+Device paths:
+
+```
+/sdcard/Android/data/com.blackout.app/files/models/     # side-loaded weights
+<apk>/lib/arm64/liblitertlm_jni.so                      # only JNI the AAR ships
+<apk>/lib/arm64/libLiteRtDispatch_Qualcomm.so           # missing; required for Backend.NPU
+```
+
+Kit-transfer of the 2.5 GB referee: USB `adb push` from the laptop, or copy into the same
+`files/models/` folder via Office Kit. Do **not** put `.litertlm` files in the APK.
+
+#### GPU (this phone)
+
+Declaring `<uses-native-library android:name="libOpenCL.so" android:required="false"/>`
+is what made GPU warm-up succeed on OriginOS. Before that, init succeeded and generate failed
+with `Can not find OpenCL library`. GPU is **not** faster than the previous CPU run on this
+fixture (~18 s Qwen / ~18.6 s Gemma referee either way).
+
+Measured 2026-09-12 on I2501, `testdoc-bank.png`, 47 spans:
+
+```
+NPU skipped for Qwen3-0.6B-int4: no libLiteRtDispatch_Qualcomm.so in …/lib/arm64
+Qwen3-0.6B-int4 loaded on GPU in 5708ms (qwen3_0.6b_q4_block32_ekv1280.litertlm)
+Gemma-4-E2B-it loaded on GPU in 7293ms (gemma-4-E2B-it.litertlm)
+spans=47 ocr_ms=174 workhorse_ms=18010 summary_ms=735 referee_ms=18640 total_ms=37385
+hide=14 keep=33 backend=GPU degraded=false
+HUD: on-device · local models · GPU
+```
+
+#### Phones B/C — Tejesh copy list (same iQOO 15 / SM8850)
+
+APK: debug `com.blackout.app` from this tree (`:app:installDebug`). Then copy **only** the
+generic CPU/GPU weights — same as phone A — into
+`/sdcard/Android/data/com.blackout.app/files/models/`:
+
+```
+qwen3_0.6b_q4_block32_ekv1280.litertlm     347,251,840 B
+gemma-4-E2B-it.litertlm                   2,588,147,712 B
+```
+
+Do **not** copy `*_qualcomm_sm8750.litertlm`. There is no dispatch `.so` and no SM8850 pack
+to copy. HUD must read `GPU` (or `CPU` if OpenCL is missing on that unit), **never** `NPU`.
 
 ---
 

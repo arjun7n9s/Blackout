@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -8,7 +9,12 @@
       There is deliberately NO android.permission.INTERNET.
       OCR and both LLMs run entirely on-device, so a cloud call in the redact path is not just
       absent by policy - it is impossible for this process to make one.
+
+      ML Kit's datatransport-cct and LiteRT's media3 dependency merge INTERNET /
+      ACCESS_NETWORK_STATE into the APK. Strip them so dumpsys matches the comment above.
     -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
 
     <!-- required=false so the app still installs on camera-less devices -->
     <uses-feature
@@ -23,6 +29,17 @@
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.Blackout">
+
+        <!-- Vendor libs GPU/NPU need to dlopen. required=false so the app still installs
+             on non-Qualcomm devices. Declaring libOpenCL.so is what made GPU warm-up
+             succeed on OriginOS; without it LiteRT could not find OpenCL. -->
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtp.so" android:required="false" />
+        <uses-native-library android:name="libQnnSystem.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpV81Stub.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpV81Skel.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

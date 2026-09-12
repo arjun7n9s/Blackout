@@ -88,8 +88,8 @@ Order matters — pushing before install fails with `remote secure_mkdirs() fail
 
 > **Windows / Git Bash:** prefix `MSYS_NO_PATHCONV=1` *and* give the local path in Windows form.
 
-**Setup is correct when** the HUD reads `on-device · local models · CPU`. Red
-`degraded · patterns only` means the weights weren't found.
+**Setup is correct when** the HUD reads `on-device · local models · GPU` (or `· CPU`).
+`NPU` would be a bug in this build. Red `degraded · patterns only` means the weights weren't found.
 
 ---
 

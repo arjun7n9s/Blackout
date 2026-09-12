@@ -234,8 +234,9 @@ spans and with how many of them the workhorse and the regex pass disagree about.
 
 ## 6. Privacy properties you can verify yourself
 
-- **No `INTERNET` permission** is declared (`app/src/main/AndroidManifest.xml`). The process
-  *cannot* make a network call — check with `adb shell dumpsys package com.blackout.app`.
+- **No `INTERNET` permission.** The manifest both omits it and `tools:node="remove"`s the
+  copy ML Kit datatransport / LiteRT media3 would merge. Check with
+  `adb shell dumpsys package com.blackout.app` — `INTERNET` must be absent.
 - The only permissions requested are `CAMERA` and `VIBRATE`.
 - The exported image has redaction bars **burned into the pixels** and is re-encoded to JPEG, so
   no EXIF survives. Pull it and inspect:
@@ -271,17 +272,14 @@ it deliberately, simply don't push `gemma-4-E2B-it.litertlm`; Qwen alone is ~350
 
 ### GPU vs CPU
 
-`LiteRtLlmRuntime` tries **GPU first, then CPU**, and proves each backend with a tiny warm-up
+`LiteRtLlmRuntime` tries **NPU → GPU → CPU**, and proves each backend with a tiny warm-up
 generation before committing to it.
 
-On the iQOO 15 the GPU engine *initialises* but every generation fails with
-`Can not find OpenCL library on this device` — OriginOS doesn't expose `libOpenCL.so` to apps —
-so it lands on CPU. On phones that do expose OpenCL you should see `GPU` in the HUD and
-substantially faster inference. Nothing to configure either way.
-
-**NPU is not supported.** It would need the Qualcomm QNN libraries (which `litertlm-android`
-does not ship) *and* per-SoC weights such as `gemma-4-E2B-it_qualcomm_sm8750.litertlm` rather than
-the generic build above.
+On the iQOO 15 (SoC **SM8850**, not SM8750) NPU is skipped: the AAR has no
+`libLiteRtDispatch_Qualcomm.so`, and there are no SM8850 packs for Qwen3-0.6B or Gemma-4-E2B.
+GPU warm-up **succeeds** once `libOpenCL.so` is declared as a `uses-native-library`. The HUD
+prints the backend that actually sampled (`GPU` on phone A). See [ARCH.md](ARCH.md) for the
+exact NPU blocker, vendor QNN paths, and what to copy onto phones B/C.
 
 ---
 

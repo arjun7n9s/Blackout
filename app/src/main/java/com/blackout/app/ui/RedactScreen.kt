@@ -142,7 +142,7 @@ fun RedactScreen(
 
         HudChip(
             degraded = state.degraded,
-            backend = state.analysis.stats.firstOrNull()?.backend,
+            backend = state.analysis.hudBackend,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .windowInsetsPadding(WindowInsets.safeDrawing)

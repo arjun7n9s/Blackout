@@ -31,10 +31,11 @@ interface LlmRuntime : AutoCloseable {
  * would silently truncate the third or fourth batch. Per-request conversations keep every batch
  * starting from a clean cache.
  *
- * **GPU with a CPU fallback.** NPU is not an option here: `litertlm-android` ships only
- * `liblitertlm_jni.so`, not the Qualcomm QNN libraries [Backend.NPU] needs, and the weights we
- * ship are the generic CPU/GPU builds rather than the separate per-SoC NPU files. [backendLabel]
- * reports what actually loaded so the UI can tell the truth rather than claim an NPU path.
+ * **NPU → GPU → CPU**, each proven with a warm-up generation before commit. NPU is only
+ * *attempted* when [NpuSupport.canAttemptNpu] is true (dispatch `.so` on disk) *and* a
+ * SoC-matched weight file exists. Missing dispatch is not probed: `Backend.NPU` without
+ * `libLiteRtDispatch_Qualcomm.so` SIGABRTs the process. [backendLabel] is what actually
+ * sampled, never what we hoped for.
  */
 class LiteRtLlmRuntime(
     private val context: Context,
@@ -61,7 +62,7 @@ class LiteRtLlmRuntime(
                 val started = System.currentTimeMillis()
                 built = Engine(
                     EngineConfig(
-                        modelPath = modelFile.absolutePath,
+                        modelPath = candidate.modelFile.absolutePath,
                         backend = candidate.backend,
                         visionBackend = null,
                         audioBackend = null,
@@ -71,11 +72,10 @@ class LiteRtLlmRuntime(
                 )
                 built.initialize()
 
-                // initialize() succeeding is NOT proof the backend works. On this handset the GPU
-                // engine initialises happily and then every generate fails with "Can not find
-                // OpenCL library on this device" - OriginOS doesn't expose libOpenCL to apps. So
-                // we spend one tiny generation proving the backend can actually sample before
-                // committing to it, which keeps the fallback honest.
+                // initialize() succeeding is NOT proof the backend works. Before we declared
+                // uses-native-library libOpenCL.so, GPU init succeeded then every generate failed
+                // with "Can not find OpenCL library". Warm-up is the gate: HUD says NPU/GPU
+                // only if this one-token generate returned.
                 warmUp(built)
 
                 engine = built
@@ -83,7 +83,8 @@ class LiteRtLlmRuntime(
                 Log.i(
                     TAG,
                     "${spec.displayName} loaded on ${candidate.label} in " +
-                        "${System.currentTimeMillis() - started}ms",
+                        "${System.currentTimeMillis() - started}ms " +
+                        "(${candidate.modelFile.name})",
                 )
                 return
             } catch (t: Throwable) {
@@ -170,12 +171,28 @@ class LiteRtLlmRuntime(
         }
     }
 
-    private data class BackendChoice(val label: String, val backend: Backend)
-
-    private fun backendCandidates(): List<BackendChoice> = listOf(
-        BackendChoice("GPU", Backend.GPU()),
-        BackendChoice("CPU", Backend.CPU()),
+    private data class BackendChoice(
+        val label: String,
+        val backend: Backend,
+        val modelFile: File,
     )
+
+    private fun backendCandidates(): List<BackendChoice> {
+        val npuWeights = ModelCatalog(context).locateNpu(spec)
+        NpuSupport.logSkip(context, spec, npuWeights)
+
+        val out = mutableListOf<BackendChoice>()
+        if (NpuSupport.canAttemptNpu(context) && npuWeights != null) {
+            out += BackendChoice(
+                "NPU",
+                Backend.NPU(context.applicationInfo.nativeLibraryDir),
+                npuWeights,
+            )
+        }
+        out += BackendChoice("GPU", Backend.GPU(), modelFile)
+        out += BackendChoice("CPU", Backend.CPU(), modelFile)
+        return out
+    }
 
     private companion object {
         const val TAG = "BlackoutLlm"

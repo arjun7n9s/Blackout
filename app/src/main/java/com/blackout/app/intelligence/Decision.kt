@@ -78,6 +78,18 @@ data class AnalysisResult(
 ) {
     val totalMs: Long get() = stats.sumOf { it.elapsedMs }
 
+    /**
+     * What the HUD prints. Distinct backends in load order, so a mixed cascade is `NPU+CPU`
+     * rather than silently advertising the first engine. Empty when nothing loaded.
+     */
+    val hudBackend: String?
+        get() {
+            val labels = stats.map { it.backend }
+                .filter { it.isNotBlank() && it != "unloaded" && it != "failed" && it != "none" }
+            if (labels.isEmpty()) return null
+            return labels.distinct().joinToString("+")
+        }
+
     companion object {
         val Empty = AnalysisResult()
     }

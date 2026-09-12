@@ -39,11 +39,23 @@ class ModelCatalog(private val context: Context) {
         return File(context.filesDir, MODELS_SUBDIR).apply { if (!exists()) mkdirs() }
     }
 
-    /** Returns the weights file for [spec], or null when it hasn't been pushed. */
-    fun locate(spec: ModelSpec): File? {
+    /** Generic CPU/GPU weights. Never an SoC-specific NPU pack. */
+    fun locate(spec: ModelSpec): File? = findByName(spec.fileName)
+
+    /**
+     * Qualcomm AOT pack for *this* SoC only. Returns null when the file isn't there, or when
+     * [NpuSupport.socModel] is unknown. Never falls back to another chip's blob (e.g. sm8750
+     * on an SM8850 phone).
+     */
+    fun locateNpu(spec: ModelSpec): File? {
+        val soc = NpuSupport.socModel() ?: return null
+        return NpuSupport.npuWeightNames(spec.fileName, soc).firstNotNullOfOrNull { findByName(it) }
+    }
+
+    private fun findByName(fileName: String): File? {
         val candidates = listOfNotNull(
-            context.getExternalFilesDir(MODELS_SUBDIR)?.let { File(it, spec.fileName) },
-            File(File(context.filesDir, MODELS_SUBDIR), spec.fileName),
+            context.getExternalFilesDir(MODELS_SUBDIR)?.let { File(it, fileName) },
+            File(File(context.filesDir, MODELS_SUBDIR), fileName),
         )
         return candidates.firstOrNull { it.isFile && it.length() > 0L }
     }
@@ -54,8 +66,17 @@ class ModelCatalog(private val context: Context) {
     fun describe(): String {
         val dir = modelsDir()
         val present = ALL.filter { isAvailable(it) }.map { it.displayName }
-        return if (present.isEmpty()) "no models in ${dir.absolutePath}"
+        val models = if (present.isEmpty()) "no models in ${dir.absolutePath}"
         else present.joinToString(", ")
+        val soc = NpuSupport.socModel() ?: "soc?"
+        val npu = when {
+            !NpuSupport.dispatchPresent(context) -> "NPU: no dispatch .so"
+            ALL.none { locateNpu(it) != null } -> "NPU: dispatch ok, no $soc weights"
+            else -> "NPU: " + ALL.mapNotNull { spec ->
+                locateNpu(spec)?.let { spec.displayName }
+            }.joinToString(",")
+        }
+        return "$models · $soc · $npu"
     }
 
     companion object {

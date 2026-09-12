@@ -46,6 +46,14 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            // Extract .so files so Backend.NPU can load libLiteRtDispatch_Qualcomm.so from
+            // applicationInfo.nativeLibraryDir once that file is dropped into jniLibs.
+            useLegacyPackaging = true
+        }
+    }
+
     // Under built-in Kotlin the `kotlin` block lives inside `android { }`.
     kotlin {
         compilerOptions {

@@ -75,9 +75,10 @@ Pushing before install fails with `remote secure_mkdirs() failed`.
 > Windows form (`C:/...`), because disabling conversion affects both directions.
 
 **Setup is correct when** the HUD chip at the top-left of the redact screen reads
-`on-device · local models · CPU` (or `· GPU`). If it reads **`degraded · patterns only`** in red,
-the weights were not found — stop and fix that before running the matrix, or every result is
-worthless.
+`on-device · local models · GPU` (or `· CPU`). It must **not** read `NPU` — there is no
+SM8850 NPU pack and no dispatch `.so` in this APK. If it reads **`degraded · patterns only`**
+in red, the weights were not found — stop and fix that before running the matrix, or every
+result is worthless.
 
 ---
 
@@ -106,7 +107,7 @@ hide=30 keep=17 unsure=0 referee_queue=21 backend=CPU degraded=false doctype=Ban
 | `workhorse_ms` / `summary_ms` / `referee_ms` | per-stage inference time |
 | `hide` / `keep` / `unsure` | final verdict counts |
 | `referee_queue` | spans Gemma re-judged; `0` means the referee never ran |
-| `backend` | `CPU` or `GPU` |
+| `backend` | `GPU` on iQOO 15 (or `CPU`); `NPU` would be a bug in this build |
 | `degraded` | `true` = models missing, result is regex-only |
 | `doctype` | Gemma's document-type guess, spaces underscored |
 

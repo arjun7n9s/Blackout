@@ -333,3 +333,31 @@ labels are no longer sent.
 A first on-device pass still hid Account Holder / Account Number: the ACCOUNT regex captured
 `Holder`/`Number` as a 6-letter "account number", the strong-hint veto stripped LABEL, and the
 models blacked them out again. Capture now requires a digit. Locked with a unit test.
+
+---
+
+## 2026-09-12 · Session 7 — NPU attempt, honest GPU
+
+Tried to put the cascade on the iQOO 15 Hexagon NPU. It does **not** run on NPU. HUD shows
+**GPU**, which is what actually sampled. Evidence:
+
+- `adb shell getprop ro.soc.model` → **SM8850** (Elite Gen 5). Not SM8750.
+- Hugging Face `litert-community`: no Qwen3-0.6B Qualcomm pack; Gemma-4-E2B Qualcomm packs are
+  `sm8750` and `qcs8275` only. `Gemma3-1B-IT_q4_ekv1280_sm8850.litertlm` exists but is a different,
+  gated model — not swapped in.
+- `litertlm-android:0.17.0` AAR contains only `liblitertlm_jni.so`. Constructing `Backend.NPU`
+  without `libLiteRtDispatch_Qualcomm.so` SIGABRTs (`No usable Dispatch runtime found`).
+- Device vendor *does* have Hexagon v81 QNN under `/vendor/lib64/hw/` (`libQnnHtp.so`, V81
+  stub/skel, `libQnnSystem.so`) plus `libcdsprpc.so`. No `libQnnHtpPrepare.so`, no Google dispatch.
+- Side effect: declaring `uses-native-library libOpenCL.so` unblocked GPU. Warm-up generate
+  succeeded. Fixture HUD: `on-device · local models · GPU`. Stats: Qwen 18010 ms, Gemma
+  referee 18640 ms, `backend=GPU`. Not faster than the earlier CPU run.
+
+Code change: try **NPU → GPU → CPU**, but only construct NPU when the dispatch `.so` is on disk
+*and* a SoC-matched weight file is in `files/models/`. Never use another SoC's pack. Warm-up
+still required before HUD says NPU. Skip reason is logged on `BlackoutLlm`.
+
+ML Kit datatransport was merging `INTERNET` into the APK; stripped with `tools:node="remove"`.
+
+Until Google ships a matching dispatch + SM8850 packs, phones A/B/C keep the generic CPU/GPU
+weights. HUD stays `GPU` (or `CPU`), never `NPU`.
