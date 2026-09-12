@@ -165,8 +165,17 @@ object Prompts {
                 append(local).append(": ").append(clip(span.text))
                 val tags = hints[span.id].orEmpty().map { it.kind.label }.distinct()
                 if (tags.isNotEmpty()) tags.joinTo(this, ",", " [", "]")
-                neighbours[span.id]?.takeIf { it.isNotBlank() }?.let {
-                    append("\n   near: ").append(clip(it))
+                // Prefer the paired field caption over the raw neighbour blob. "label: PAN" tells
+                // the referee what this value *is*; the generic "near: ..." context used to hand
+                // it the surrounding values too, which is how labels ended up judged as if they
+                // were their own contents.
+                val caption = span.labelText?.takeIf { it.isNotBlank() }
+                if (caption != null) {
+                    append("\n   label: ").append(clip(caption))
+                } else {
+                    neighbours[span.id]?.takeIf { it.isNotBlank() }?.let {
+                        append("\n   near: ").append(clip(it))
+                    }
                 }
                 append('\n')
             }

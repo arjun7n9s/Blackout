@@ -1,5 +1,6 @@
 package com.blackout.app.intelligence
 
+import com.blackout.app.ocr.SpanRole
 import com.blackout.app.ocr.TextSpan
 
 /**
@@ -10,11 +11,12 @@ import com.blackout.app.ocr.TextSpan
  *
  * Resolution order, highest priority first:
  *  1. **User override.** An explicit tap always wins. Nothing overrules the person holding the phone.
- *  2. **Referee** (Gemma) - only ever present for spans the workhorse flagged UNSURE.
- *  3. **Workhorse** (Qwen).
- *  4. **Hints**, but *only* when [degraded] is true (no model available). Otherwise hints are
+ *  2. **Layout.** A span geometrically identified as a field label stays visible.
+ *  3. **Referee** (Gemma) - contested spans only; labels are excluded from that queue.
+ *  4. **Workhorse** (Qwen).
+ *  5. **Hints**, but *only* when [degraded] is true (no model available). Otherwise hints are
  *     context for the prompt, never a decision, per the architecture rules.
- *  5. **Default -> KEEP.**
+ *  6. **Default -> KEEP.**
  *
  * The central safety choice: **UNSURE is not HIDE.** An unresolved span stays visible, because a
  * false positive silently destroys information the user wanted, while a false negative is visible
@@ -38,6 +40,23 @@ object MergePolicy {
             val userAction = userOverrides[id]
             if (userAction != null) {
                 out[id] = SpanDecision(id, userAction, DecisionSource.USER, "user tap")
+                continue
+            }
+
+            // Layout beats BOTH models, which is a deliberate and slightly uncomfortable choice.
+            //
+            // Justification is empirical: on the two-column fixture, 11 of 13 wrongly-hidden
+            // strings were left-column labels, and the referee was the source of most of them -
+            // it receives the value as neighbour context, so "Aadhaar" gets judged next to
+            // "2345 6789 0123". The models are systematically wrong in one direction here and
+            // geometry is not.
+            //
+            // The risk - a genuinely sensitive span misread as a label - is closed upstream:
+            // FieldLayout.applyTo refuses LABEL to anything carrying a strong regex hint, and
+            // looksLikeLabel rejects digits, '@' and long text. Whatever slips through is one
+            // tap from hidden, and the user can see it to make that call.
+            if (span.role == SpanRole.LABEL) {
+                out[id] = SpanDecision(id, Action.KEEP, DecisionSource.LAYOUT, "field label")
                 continue
             }
 
@@ -120,6 +139,12 @@ object MergePolicy {
         val spanHints = hints[span.id].orEmpty()
         val strong = spanHints.any { it.strength == HintStrength.STRONG }
         when {
+            // A label's verdict is already settled by layout, so refereeing it is pure cost -
+            // and on the fixture the referee was the thing wrongly hiding them. Note that labels
+            // are still sent to the *workhorse*: dropping them would destroy the label/value
+            // adjacency ReadingOrder exists to create, and leave batches of pure values that
+            // legitimately come back all-hide and trip isModeCollapsed.
+            span.role == SpanRole.LABEL -> null
             span.id in lowConfidence -> span.id
             // No usable answer at all. A 0.6B routinely returns `{"decisions":[]}` for a whole
             // batch; treating that as "keep everything" is a silent, total failure of the

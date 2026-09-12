@@ -79,7 +79,14 @@ object CandidateHints {
         DATE.findAll(text).forEach { out += CandidateHint(HintKind.DATE, it.value, HintStrength.WEAK) }
         MONEY.findAll(text).forEach { out += CandidateHint(HintKind.MONEY, it.value, HintStrength.WEAK) }
         ACCOUNT.findAll(text).forEach {
-            out += CandidateHint(HintKind.ACCOUNT, it.groupValues.getOrNull(1) ?: it.value)
+            // The capture is the token after "account"/"IFSC"/… . Without a digit it is almost
+            // always the rest of a field caption ("Account Holder", "Account Number") — and a
+            // STRONG hit on those is what made FieldLayout refuse them LABEL, so the models
+            // blacked them out again. Real account/IFSC/IBAN values contain a digit.
+            val token = it.groupValues.getOrNull(1) ?: it.value
+            if (token.any(Char::isDigit)) {
+                out += CandidateHint(HintKind.ACCOUNT, token)
+            }
         }
 
         // Luhn sets CONFIDENCE; it must never gate the hint.

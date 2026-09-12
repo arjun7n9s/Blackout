@@ -13,8 +13,7 @@ import kotlin.math.abs
  * a list of field captions genuinely isn't sensitive.
  *
  * Banding spans into visual rows and sorting left-to-right restores "Account Holder |
- * Priya Ramachandran" adjacency, which is what the whole "lines are in reading order" premise in
- * [com.blackout.app.intelligence.Prompts] depends on.
+ * Priya Ramachandran" adjacency, and the same banding is what [FieldLayout] uses to pair them.
  */
 object ReadingOrder {
 
@@ -23,29 +22,38 @@ object ReadingOrder {
 
     fun sort(spans: List<TextSpan>): List<TextSpan> {
         if (spans.size < 2) return spans
+        return rows(spans)
+            .flatten()
+            // Renumber so ids run in reading order too - the models see small sequential ids and
+            // the neighbour lookup in Prompts becomes a simple index step.
+            .mapIndexed { index, span -> span.copy(id = index + 1) }
+    }
+
+    /**
+     * Groups spans into visual rows, each sorted left-to-right, rows ordered top-to-bottom.
+     *
+     * Shared with [FieldLayout] so label/value pairing sees exactly the same banding the reading
+     * order was built from.
+     */
+    fun rows(spans: List<TextSpan>): List<List<TextSpan>> {
+        if (spans.isEmpty()) return emptyList()
+        if (spans.size == 1) return listOf(spans)
 
         val heights = spans.map { it.rect.height }.sorted()
         val median = heights[heights.size / 2]
         val tolerance = (median * ROW_TOLERANCE).toInt().coerceAtLeast(4)
 
-        val rows = mutableListOf<MutableList<TextSpan>>()
+        val banded = mutableListOf<MutableList<TextSpan>>()
         for (span in spans.sortedBy { it.rect.top }) {
             val centre = (span.rect.top + span.rect.bottom) / 2
-            val row = rows.lastOrNull()
-            val rowCentre = row?.let { r ->
-                r.sumOf { (it.rect.top + it.rect.bottom) / 2 } / r.size
-            }
+            val row = banded.lastOrNull()
+            val rowCentre = row?.let { r -> r.sumOf { (it.rect.top + it.rect.bottom) / 2 } / r.size }
             if (row != null && rowCentre != null && abs(centre - rowCentre) <= tolerance) {
                 row += span
             } else {
-                rows += mutableListOf(span)
+                banded += mutableListOf(span)
             }
         }
-
-        // Renumber so ids run in reading order too - the models see small sequential ids and the
-        // neighbour lookup in Prompts becomes a simple index step.
-        return rows
-            .flatMap { row -> row.sortedBy { it.rect.left } }
-            .mapIndexed { index, span -> span.copy(id = index + 1) }
+        return banded.map { row -> row.sortedBy { it.rect.left } }
     }
 }

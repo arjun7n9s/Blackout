@@ -1,6 +1,7 @@
 package com.blackout.app.intelligence
 
 import com.blackout.app.ocr.SpanRect
+import com.blackout.app.ocr.SpanRole
 import com.blackout.app.ocr.TextSpan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,8 +10,11 @@ import org.junit.Test
 
 class MergePolicyTest {
 
-    private fun span(id: Int, text: String = "x") =
-        TextSpan(id, text, SpanRect(0, id * 10, 100, id * 10 + 8), 1f, 0, id)
+    private fun span(
+        id: Int,
+        text: String = "x",
+        role: SpanRole = SpanRole.STANDALONE,
+    ) = TextSpan(id, text, SpanRect(0, id * 10, 100, id * 10 + 8), 1f, 0, id, role = role)
 
     private val spans = listOf(span(1), span(2), span(3))
 
@@ -157,5 +161,62 @@ class MergePolicyTest {
             lowConfidence = setOf(1),
         )
         assertTrue(1 in queue)
+    }
+
+    @Test
+    fun `layout keep beats both models hiding a field label`() {
+        val labelled = listOf(
+            span(1, "Account Holder", SpanRole.LABEL),
+            span(2, "Priya Ramachandran", SpanRole.VALUE),
+            span(3),
+        )
+        val merged = MergePolicy.merge(
+            spans = labelled,
+            workhorse = mapOf(
+                1 to decision(1, Action.HIDE),
+                2 to decision(2, Action.HIDE),
+            ),
+            referee = mapOf(1 to decision(1, Action.HIDE, DecisionSource.REFEREE)),
+        )
+        assertEquals(Action.KEEP, merged.getValue(1).action)
+        assertEquals(DecisionSource.LAYOUT, merged.getValue(1).source)
+        assertEquals(Action.HIDE, merged.getValue(2).action)
+        assertFalse(1 in MergePolicy.hiddenIds(merged))
+        assertTrue(2 in MergePolicy.hiddenIds(merged))
+    }
+
+    @Test
+    fun `user tap still hides a layout label`() {
+        val labelled = listOf(span(1, "PAN", SpanRole.LABEL), span(2), span(3))
+        val merged = MergePolicy.merge(
+            spans = labelled,
+            workhorse = mapOf(1 to decision(1, Action.KEEP)),
+            userOverrides = mapOf(1 to Action.HIDE),
+        )
+        assertEquals(Action.HIDE, merged.getValue(1).action)
+        assertEquals(DecisionSource.USER, merged.getValue(1).source)
+        assertTrue(1 in MergePolicy.hiddenIds(merged))
+    }
+
+    @Test
+    fun `labels are excluded from the referee queue`() {
+        val labelled = listOf(
+            span(1, "Aadhaar", SpanRole.LABEL),
+            span(2, "2345 6789 0123", SpanRole.VALUE),
+            span(3),
+        )
+        val queue = MergePolicy.refereeQueue(
+            spans = labelled,
+            workhorse = mapOf(
+                1 to decision(1, Action.HIDE),
+                2 to decision(2, Action.HIDE),
+                3 to decision(3, Action.UNSURE),
+            ),
+            hints = emptyMap(),
+        )
+        // 1 is a label: layout has already settled it, even though hide-without-hint
+        // would otherwise escalate. 2 is a value with hide-and-no-hint, so it still goes.
+        // 3 abstained.
+        assertEquals(listOf(2, 3), queue)
     }
 }

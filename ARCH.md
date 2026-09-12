@@ -18,16 +18,21 @@ Camera / gallery / shared-in image
         ▼
   intelligence/ CandidateHints                 → regex signals (WEAK / STRONG)
         │
+        ▼
+  ocr/          FieldLayout                    → LABEL / VALUE / STANDALONE
+        │       two-column geometry + caption lexicon; strong-hint veto
+        │
         ├─ Qwen3-0.6B  (workhorse)  every span, batches of 10, constrained JSON
         │       │
         │       └─ refereeQueue: unsure ∪ (keep + STRONG hint) ∪ (hide + no hint)
         │                        ∪ missing ∪ mode-collapsed batches
+        │                        — labels excluded (layout has already settled them)
         │
-        └─ Gemma-4-E2B (referee)    only the contested spans + a doc-type summary
+        └─ Gemma-4-E2B (referee)    only the contested *values* + a doc-type summary
         │
         ▼
   MergePolicy.merge()                          → Map<spanId, SpanDecision>
-        │   user tap > referee > workhorse > (hints, degraded only) > KEEP
+        │   user tap > layout KEEP > referee > workhorse > (hints, degraded only) > KEEP
         ▼
   redact/       Compose overlay (interactive)  ← what you see
                 RedactionEngine.render()       ← what you share: bars burned into a COPY
@@ -146,10 +151,11 @@ confused, and a wrong hide is one tap from being undone whereas a leak is not.
 Priority, highest first:
 
 1. **User tap** — always wins.
-2. **Referee** (Gemma).
-3. **Workhorse** (Qwen).
-4. **Hints** — *only* when degraded.
-5. **Default → KEEP.**
+2. **Layout** — a span identified as a field label stays visible. Beats both models.
+3. **Referee** (Gemma).
+4. **Workhorse** (Qwen).
+5. **Hints** — *only* when degraded.
+6. **Default → KEEP.**
 
 Two properties this encodes:
 
@@ -167,7 +173,7 @@ itself (outside the degraded path, which the UI labels).
 |---|---|
 | `unsure` | the workhorse abstained |
 | `keep` + STRONG hint | false negative — regex disagrees |
-| `hide` + no hint | false positive — this is how field labels get blacked out |
+| `hide` + no hint | false positive on a *value* or unpaired span — labels never reach this rule |
 | no decision returned | empty/short batch; escalating beats defaulting to keep |
 | mode-collapsed batch | uniform verdict across ≥4 spans is a decoding artefact, not a judgement |
 
@@ -176,9 +182,20 @@ makes a 0.6B latch onto its first action and repeat it — a batch holding a PAN
 their labels came back as ten consecutive `hide`. A uniform batch is treated as a *confidence
 signal*, not a verdict.
 
-The `hide + no hint` rule is what lets the referee **remove** redactions: on the test statement it
-restored "MERIDIAN BANK" (*"Bank name is generic label"*) while keeping every value hidden. Without
-it the referee could only ever add bars.
+The `hide + no hint` rule is what lets the referee **remove** redactions on unpaired text: on the
+test statement it restored "MERIDIAN BANK" (*"Bank name is generic label"*) while keeping every
+value hidden. Field *labels* no longer depend on that rule — `FieldLayout` keeps them visible
+before the referee runs, because Gemma was the thing confirming most of the wrong hides (it
+sees the value as neighbour context).
+
+Labels still go to the **workhorse**. Dropping them would destroy the label/value adjacency
+`ReadingOrder` exists to create, and leave all-value batches that trip `isModeCollapsed`.
+MergePolicy then overrides any `hide` on a LABEL. A strong regex hint vetoes LABEL status, so a
+name printed in the left column stays redactable.
+
+Stacked ID cards (caption above value, same left edge) are left entirely alone — a lone
+left-column span is never a label, which is what keeps `PRIYA RAMACHANDRAN` on a PAN card
+hideable.
 
 ---
 
@@ -219,11 +236,13 @@ Nothing fails silently into "share the original".
 
 ## Known gaps
 
-- **Over-redaction on dense forms.** Conservative by design, and one tap fixes each — but the
-  workhorse still tars some field labels with the value beside them.
+- **Residual label misses.** Two-column forms with a detected label column keep captions visible
+  structurally. Captions outside that pattern (stacked PAN/Aadhaar cards, one-off headings,
+  lexicon misses) still go to the models. Conservative; one tap fixes each.
 - **Referee cost.** Gemma on CPU is ~1.7 s/span; a heavily contested page can take minutes. A
   queue cap, or dropping to `Qwen3-1.7B` as referee, is the obvious next lever.
-- **Line-granularity spans.** Hiding a line hides its label too. Word-level rects within a hidden
-  line would be tighter.
+- **Line-granularity spans.** Hiding a line hides its label too when both sit in one OCR line.
+  Word-level rects within a hidden line would be tighter. Not started — a different milestone
+  than pairing two-column boxes.
 - Bitmap lives in the ViewModel, so it won't survive process death. Portrait lock makes config
   changes moot for now.

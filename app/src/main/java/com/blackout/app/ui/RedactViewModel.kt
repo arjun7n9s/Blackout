@@ -99,12 +99,18 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val analysis = runCatching {
-                analyzer.analyze(result.spans) { stage -> _state.update { it.copy(statusLine = label(stage)) } }
+                analyzer.analyze(result.spans, result.imageWidth) { stage -> _state.update { it.copy(statusLine = label(stage)) } }
             }.getOrElse { t ->
-                AnalysisResult(degraded = true, degradedReason = t.message ?: "analysis failed")
+                AnalysisResult(
+                    degraded = true,
+                    degradedReason = t.message ?: "analysis failed",
+                    spans = result.spans,
+                )
             }
 
-            applyAnalysis(result.spans, analysis)
+            // Merge the layout-applied spans. Using the raw OCR list here is how FieldLayout
+            // compiled and still left every caption STANDALONE - LAYOUT KEEP never fired.
+            applyAnalysis(analysis.spans.ifEmpty { result.spans }, analysis)
         }
     }
 
@@ -158,6 +164,20 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
                 "referee_queue=${analysis.referee.size} backend=$backend " +
                 "degraded=${analysis.degraded} doctype=$doctype",
         )
+
+        if (com.blackout.app.BuildConfig.DEBUG) {
+            // One line per span, so a fixture with known ground truth can be scored for
+            // precision/recall instead of eyeballing screenshots. `text` is last because it is
+            // the only field that can contain spaces.
+            for (span in spans) {
+                val d = decisions[span.id] ?: continue
+                Log.i(
+                    SPANS_TAG,
+                    "id=${span.id} action=${d.action} src=${d.source} " +
+                        "x=${span.rect.left} y=${span.rect.top} text=${span.text}",
+                )
+            }
+        }
     }
 
     /** Flip one span. This is the uncensor / manual-hide gesture. */
@@ -200,6 +220,7 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val STATS_TAG = "BlackoutStats"
+        const val SPANS_TAG = "BlackoutSpans"
     }
 
     override fun onCleared() {

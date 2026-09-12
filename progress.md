@@ -289,3 +289,47 @@ Also pinned down two things so C doesn't chase ghosts: **haptics exist** (heavy 
 lands, light tick on span toggle), **voice does not** in this build; and the OCR model is ML Kit
 **Latin**, so Devanagari is expected to fail — C is asked to quantify how badly rather than file
 it as a bug.
+
+---
+
+## 2026-09-12 · Session 6 — label vs value, structurally
+
+The worst demo bug: on the two-column bank fixture, **13 of 24 must-keep strings were hidden
+(54%)**, HIDE precision 0.536 / recall 0.750. Eleven of those thirteen sat at x≈60 — the left
+caption column — and the referee was confirming most of them, because neighbour context handed
+Gemma the value next to the label.
+
+Fix is geometric, not a bigger prompt:
+
+- `FieldLayout` detects a label column (≥3 agreeing rows, real gap, caption lexicon / trailing
+  colon). Pair left caption ↔ right value. Stacked PAN/Aadhaar cards are left entirely alone so a
+  name sharing the left edge cannot become un-redactable. `looksLikeLabel` is a whitelist — the
+  permissive "short title-case" version would classify `Priya Ramachandran` as a label.
+- MergePolicy: **user tap > layout KEEP > referee > workhorse**. Labels still go to Qwen
+  (adjacency / mode-collapse) and are **excluded from the referee**. A strong regex hint vetoes
+  LABEL.
+- Values carry `labelText` into the referee prompt (`label: PAN`) instead of the neighbour blob.
+
+The first cut compiled and the unit tests passed *and still would have failed on device*: layout
+roles lived only inside `RedactionAnalyzer`, then `RedactViewModel` remarged the raw OCR list, so
+every span was `STANDALONE` and LAYOUT KEEP never fired. `AnalysisResult.spans` now carries the
+layout-applied copies, and merge/overlay/share read from those.
+
+Word-level boxes inside a mixed line are **not** in this change — that's a different OCR-granularity
+milestone, recorded as a known gap.
+
+Measurement harness (for the before/after): `BlackoutSpans` log lines, `tools/fixture_bank.py`,
+`tools/score_spans.py`. Same fixture, full cascade, iQOO 15:
+
+| | hide | keep | over-redaction | HIDE precision | recall |
+|---|---|---|---|---|---|
+| baseline (session 5) | 30 | 17 | **13/24 = 54%** | 0.536 | 0.750 |
+| after this change | 17 | 30 | **1/24 = 4%** | 0.938 | 0.750 |
+
+15 captions classified LABEL (Account Holder, Account Number, PAN, Aadhaar, …). The remaining
+must-keep hide is a transaction date `19/08` — one tap. Referee queue shrank 21 → 10 because
+labels are no longer sent.
+
+A first on-device pass still hid Account Holder / Account Number: the ACCOUNT regex captured
+`Holder`/`Number` as a 6-letter "account number", the strong-hint veto stripped LABEL, and the
+models blacked them out again. Capture now requires a digit. Locked with a unit test.

@@ -2,6 +2,8 @@ package com.blackout.app.intelligence
 
 import android.content.Context
 import android.util.Log
+import com.blackout.app.ocr.FieldLayout
+import com.blackout.app.ocr.SpanRole
 import com.blackout.app.ocr.TextSpan
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -41,16 +43,34 @@ class RedactionAnalyzer(
     private var refereeRuntime: LlmRuntime? = null
 
     suspend fun analyze(
-        spans: List<TextSpan>,
+        rawSpans: List<TextSpan>,
+        imageWidth: Int,
         onStage: (AnalysisStage) -> Unit = {},
     ): AnalysisResult = withContext(dispatcher) {
-        if (spans.isEmpty()) return@withContext AnalysisResult.Empty
+        if (rawSpans.isEmpty()) return@withContext AnalysisResult.Empty
 
         onStage(AnalysisStage.Hints)
-        val hints = buildHints(spans)
+        val hints = buildHints(rawSpans)
+
+        // Geometric label/value roles. Hints are computed first because they are the safety
+        // interlock: a span carrying a strong pattern is never accepted as a label, so a name or
+        // email printed in the left column can't be made un-redactable by geometry.
+        val layout = FieldLayout.detect(rawSpans, imageWidth)
+        val spans = FieldLayout.applyTo(rawSpans, layout) { span ->
+            hints[span.id].orEmpty().any { it.strength == HintStrength.STRONG }
+        }
+        if (layout.labelColumnX != null) {
+            Log.i(
+                TAG,
+                "label column at x=${layout.labelColumnX}, " +
+                    "${spans.count { it.role == SpanRole.LABEL }} labels / " +
+                    "${spans.count { it.role == SpanRole.VALUE }} values",
+            )
+        }
 
         val workhorseFile = catalog.locate(ModelCatalog.QWEN)
             ?: return@withContext degraded(
+                spans,
                 hints,
                 "workhorse weights not found in ${catalog.modelsDir().name}/",
             )
@@ -62,7 +82,11 @@ class RedactionAnalyzer(
             })
         } catch (t: Throwable) {
             Log.e(TAG, "workhorse load failed", t)
-            return@withContext degraded(hints, "could not load ${ModelCatalog.QWEN.displayName}")
+            return@withContext degraded(
+                spans,
+                hints,
+                "could not load ${ModelCatalog.QWEN.displayName}",
+            )
         }
 
         val stats = mutableListOf<InferenceStat>()
@@ -70,7 +94,11 @@ class RedactionAnalyzer(
         val workhorseDecisions = runWorkhorse(workhorse, spans, stats, lowConfidence, onStage)
 
         if (workhorseDecisions.isEmpty()) {
-            return@withContext degraded(hints, "${ModelCatalog.QWEN.displayName} returned nothing")
+            return@withContext degraded(
+                spans,
+                hints,
+                "${ModelCatalog.QWEN.displayName} returned nothing",
+            )
         }
 
         // Referee pass, only over contested spans.
@@ -104,6 +132,7 @@ class RedactionAnalyzer(
             stats = stats,
             docSummary = docSummary,
             degraded = false,
+            spans = spans,
         )
     }
 
@@ -247,11 +276,17 @@ class RedactionAnalyzer(
     }
 
     private fun degraded(
+        spans: List<TextSpan>,
         hints: Map<Int, List<CandidateHint>>,
         reason: String,
     ): AnalysisResult {
         Log.w(TAG, "degraded: $reason")
-        return AnalysisResult(hints = hints, degraded = true, degradedReason = reason)
+        return AnalysisResult(
+            hints = hints,
+            degraded = true,
+            degradedReason = reason,
+            spans = spans,
+        )
     }
 
     /** Frees both engines. Gemma alone holds ~2.5 GB, so this matters. */

@@ -51,4 +51,13 @@ class CandidateHintsTest {
         assertTrue(CandidateHints.detect("Full Name").isEmpty())
         assertTrue(CandidateHints.detect("GOVERNMENT OF INDIA").isEmpty())
     }
+
+    @Test
+    fun `account captions are not account numbers`() {
+        // "Holder" and "Number" are 6 letters, which the capture group would otherwise eat.
+        assertTrue(CandidateHints.detect("Account Holder").isEmpty())
+        assertTrue(CandidateHints.detect("Account Number").isEmpty())
+        assertTrue(HintKind.ACCOUNT in kinds("Account 501234567890"))
+        assertTrue(HintKind.ACCOUNT in kinds("IFSC MERI0004471"))
+    }
 }

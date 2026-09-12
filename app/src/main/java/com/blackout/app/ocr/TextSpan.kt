@@ -29,6 +29,28 @@ data class SpanRect(
 }
 
 /**
+ * What a span is *structurally*, independent of whether its content is sensitive.
+ *
+ * This is the fix for the worst demo bug: on a two-column form the models were blacking out the
+ * left-hand field label ("Account Holder", "PAN") along with its value. A field label is a
+ * property of the *form*, not of the person, so it is almost never the secret - and knowing that
+ * geometrically is far more reliable than hoping a 0.6B infers it.
+ */
+enum class SpanRole {
+    /** Left-column field caption in a label/value pair. Defaults to visible. */
+    LABEL,
+
+    /** The value paired with a [LABEL]. This is where secrets live. */
+    VALUE,
+
+    /** A section heading or title - full-width, no pair. */
+    HEADING,
+
+    /** Everything else: prose, table cells, anything unpaired. Judged normally. */
+    STANDALONE,
+}
+
+/**
  * One OCR'd chunk of text with a stable id for the session.
  *
  * The id is what the models reason about - they return decisions keyed by id and never touch
@@ -41,6 +63,9 @@ data class TextSpan(
     val confidence: Float,
     val blockIndex: Int,
     val lineIndex: Int,
+    val role: SpanRole = SpanRole.STANDALONE,
+    /** For a [SpanRole.VALUE], the text of the label it was paired with. Prompt context. */
+    val labelText: String? = null,
 ) {
     val isBlank: Boolean get() = text.isBlank()
 }
