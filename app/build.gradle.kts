@@ -43,6 +43,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // Under built-in Kotlin the `kotlin` block lives inside `android { }`.
@@ -57,6 +58,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
 
     // Compose BOM governs all androidx.compose.* versions below
@@ -76,4 +78,9 @@ dependencies {
     // ML Kit on-device text recognition.
     // Not used in v0 - kept because OCR is the next step and the artifact is already cached.
     implementation(libs.mlkit.text.recognition)
+
+    // On-device LLM cascade (Qwen3 workhorse + Gemma referee)
+    implementation(libs.litertlm.android)
+
+    testImplementation(libs.junit)
 }

@@ -22,5 +22,15 @@
     <string name="capture_failed">Couldn\'t capture the photo. Try again.</string>
     <string name="camera_failed">Couldn\'t start the camera.</string>
     <string name="load_failed">Couldn\'t load that image.</string>
-    <string name="v0_notice">Redaction lands in the next build — v0 stops at capture.</string>
+
+    <!-- v1: redaction -->
+    <string name="hud_on_device">on-device · local models</string>
+    <string name="hud_degraded">degraded · patterns only</string>
+    <string name="tap_to_toggle">Tap a bar to reveal · tap text to hide</string>
+    <string name="share_redacted">Share redacted</string>
+    <string name="share_image">Share</string>
+    <string name="share_chooser">Share redacted image</string>
+    <string name="share_failed">Couldn\'t prepare the image.</string>
+    <string name="no_text_found">No text found in this image.</string>
+    <string name="home_footer">OCR and both models run on this phone. Nothing is uploaded.</string>
 </resources>

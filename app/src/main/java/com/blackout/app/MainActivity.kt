@@ -1,7 +1,10 @@
 package com.blackout.app
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
+import androidx.core.content.IntentCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,10 +31,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.blackout.app.camera.decodeSampledBitmap
+import com.blackout.app.share.ShareRedacted
 import com.blackout.app.ui.CameraScreen
 import com.blackout.app.ui.HomeScreen
 import com.blackout.app.ui.PhotoPreviewScreen
+import com.blackout.app.ui.RedactScreen
+import com.blackout.app.ui.RedactViewModel
 import com.blackout.app.ui.rememberCameraPermissionState
 import com.blackout.app.ui.theme.BlackoutTheme
 import kotlinx.coroutines.launch
@@ -40,12 +47,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val shared = incomingImage(intent)
         setContent {
             BlackoutTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    BlackoutApp()
+                    BlackoutApp(sharedImage = shared)
                 }
             }
+        }
+    }
+
+    /** An image handed to us by another app via ACTION_SEND or ACTION_VIEW. */
+    private fun incomingImage(intent: Intent?): Uri? {
+        if (intent == null) return null
+        if (intent.type?.startsWith("image/") != true) return null
+        return when (intent.action) {
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(
+                intent, Intent.EXTRA_STREAM, Uri::class.java
+            )
+            Intent.ACTION_VIEW -> intent.data
+            else -> null
         }
     }
 }
@@ -58,11 +79,14 @@ class MainActivity : ComponentActivity() {
 private sealed interface Screen {
     data object Home : Screen
     data object Camera : Screen
+    /** Capture review: keep or retake, before spending inference on it. */
     data class Preview(val photo: Bitmap) : Screen
+    /** OCR + cascade + redaction surface. */
+    data object Redact : Screen
 }
 
 @Composable
-private fun BlackoutApp() {
+private fun BlackoutApp(sharedImage: Uri? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbars = remember { SnackbarHostState() }
@@ -71,9 +95,22 @@ private fun BlackoutApp() {
     var awaitingPermission by remember { mutableStateOf(false) }
 
     val permission = rememberCameraPermissionState()
+    val redactViewModel: RedactViewModel = viewModel()
 
     fun toast(message: String) {
         scope.launch { snackbars.showSnackbar(message) }
+    }
+
+    // An image shared in from another app skips capture and goes straight to redaction.
+    LaunchedEffect(sharedImage) {
+        val uri = sharedImage ?: return@LaunchedEffect
+        val bitmap = decodeSampledBitmap(context, uri)
+        if (bitmap == null) {
+            toast(context.getString(R.string.load_failed))
+        } else {
+            redactViewModel.start(bitmap)
+            screen = Screen.Redact
+        }
     }
 
     // If the user tapped "Take photo" before granting, open the camera as soon as they allow it.
@@ -126,8 +163,34 @@ private fun BlackoutApp() {
             is Screen.Preview -> PhotoPreviewScreen(
                 photo = current.photo,
                 onRetake = { screen = Screen.Camera },
-                // v0 stops here on purpose - the redaction pass is the next milestone.
-                onUsePhoto = { toast(context.getString(R.string.v0_notice)) },
+                onUsePhoto = {
+                    redactViewModel.start(current.photo)
+                    screen = Screen.Redact
+                },
+            )
+
+            Screen.Redact -> RedactScreen(
+                viewModel = redactViewModel,
+                onRetake = {
+                    redactViewModel.reset()
+                    screen = Screen.Camera
+                },
+                onShare = {
+                    scope.launch {
+                        val redacted = redactViewModel.renderRedacted()
+                        if (redacted == null) {
+                            toast(context.getString(R.string.share_failed))
+                        } else {
+                            runCatching {
+                                ShareRedacted.share(
+                                    context = context,
+                                    redacted = redacted,
+                                    chooserTitle = context.getString(R.string.share_chooser),
+                                )
+                            }.onFailure { toast(context.getString(R.string.share_failed)) }
+                        }
+                    }
+                },
             )
         }
 

@@ -122,3 +122,93 @@ on a violet gradient. Includes a `<monochrome>` layer for Android 13+ themed ico
 - Bitmap lives in composition state, so it wouldn't survive a config change. Portrait lock makes
   this moot for now; a `ViewModel` is the fix when it stops being moot
 - No tests yet
+
+---
+
+## 2026-09-12 · Session 3 — v1 on-device redaction cascade
+
+OCR → Qwen3-0.6B → Gemma-4-E2B → blackout → tap-to-uncensor → share. All on-device.
+Architecture in [ARCH.md](ARCH.md).
+
+### Resolving the LiteRT-LM API
+
+Two research agents died on a session limit, so the API was resolved directly: downloaded
+`litertlm-android-0.17.0.aar` from Google Maven, extracted `classes.jar`, and read the real
+signatures with `javap`. Worth the detour — it surfaced three things the sample never used:
+
+- `ResponseFormat.json(schema)` — **constrained JSON decoding**
+- `ThinkingConfig(enableThinking=false)` — Qwen3 reasons by default and would eat the whole cache
+- `sendMessage(String, …)` — a plain String overload
+
+The AAR ships `liblitertlm_jni.so` for arm64-v8a and x86_64 only. Everything compiled first try.
+
+### Built
+
+```
+ocr/            TextSpan, SpanRect, MlKitOcrEngine, ReadingOrder
+intelligence/   CandidateHints, Prompts, DecisionParser, MergePolicy,
+                ModelCatalog, LlmRuntime, RedactionAnalyzer
+redact/         RedactionEngine (burn + hit-test)
+share/          ShareRedacted (FileProvider, redacted only)
+ui/             RedactViewModel, RedactScreen, FitTransform, Haptics
+```
+
+32 unit tests, all passing, no device or Robolectric needed.
+
+### Five real bugs, found by running it
+
+1. **GPU initialises but cannot generate.** `Engine.initialize()` succeeded, then every batch
+   failed with `Can not find OpenCL library on this device` — OriginOS doesn't expose libOpenCL.
+   Backend fallback only triggered on init failure, so the whole run silently degraded.
+   Fix: `load()` now spends one tiny **warm-up generation** proving a backend can sample.
+2. **ML Kit returns block order, not reading order.** The killer. On a two-column statement the
+   labels came out as one block and the values as another, so batch 1 was *all* field labels and
+   batch 3 was *all* bare values — each stripped of the context that makes it judgeable. The model
+   kept everything, correctly. Fix: `ReadingOrder` row-bands spans and sorts left-to-right, which
+   restores `Account Holder | Priya Ramachandran` adjacency.
+3. **Constrained decoding emitted `{"decisions":[]}`.** Schema-valid, and observed on a batch
+   containing an account number, a PAN and an Aadhaar. Every span fell through to `keep` — a
+   silent, total redaction failure. Fix: per-batch `minItems`/`maxItems` pinned to the span count.
+4. **Mode collapse.** Greedy decoding over a constrained grammar made the 0.6B latch onto one
+   action and repeat it — ten consecutive `hide`. Fix: few-shot label-vs-value examples in the
+   system prompt (which fixed it), plus `isModeCollapsed` as a safety net that escalates any
+   uniform batch to the referee.
+5. **The referee could only ever add redactions.** The queue caught `unsure` and
+   `keep`+strong-hint but never `hide`, so false-positive hides went unreviewed and every field
+   label stayed blacked out. Fix: escalate `hide` with no corroborating hint. The referee then
+   restored "MERIDIAN BANK" — *"Bank name is generic label"* — while keeping every value hidden.
+
+### Verified on the iQOO 15
+
+Tested with a generated bank statement (name, account no., IFSC, PAN, Aadhaar, DOB, mobile,
+email, address, balances) pushed to the device.
+
+- Both models load on **CPU** after the GPU probe fails — Qwen 1.1 s, Gemma 3.2 s
+- 47 spans · OCR 201 ms · Qwen 5 batches 8.2 s · Gemma summary 1.1 s (correctly returned
+  "Bank statement") · Gemma referee 25.7 s · **~35 s total inference**
+- Referee reasons are specific and correct: *"specific account holder name"*, *"generic account
+  label"*, *"Aadhaar is sensitive"*
+- Tap-to-uncensor works — revealed "Account Holder" while its value stayed hidden
+- Share opens the system chooser; **the exported file was pulled back and decoded on the laptop**:
+  119 031 bytes byte-for-byte, valid JPEG, bars present in the actual pixels, EXIF stripped
+
+### Decisions worth recording
+
+- **HUD says `on-device · local models · CPU`, not NPU.** NPU would need Qualcomm QNN libs the
+  AAR doesn't ship, plus the per-SoC `..._qualcomm_sm8750.litertlm` weights rather than the
+  generic build we have. Showing the real backend beats claiming a path the build can't take.
+- **Hints are withheld from the workhorse prompt.** Keeping the regex and model signals
+  independent is what makes their disagreement informative — and it's what structurally
+  guarantees a hint can never redact on its own.
+- **Luhn sets confidence, never gates.** Every single-digit corruption of a valid Luhn number
+  fails Luhn, so a card with one OCR error would always be missed if the checksum gated the hint.
+- **Overlay on screen, burned pixels on export.** Re-rendering a 1536×2048 bitmap per tap would
+  stutter; `ShareRedacted` has no parameter that could carry the original.
+- **Added an inbound share/view intent** so a screenshot can be redacted from any app. Genuinely
+  useful, and it made the pipeline testable without a physical document.
+
+### Known gaps
+
+- Over-redacts field labels on dense forms — conservative, one tap each to fix
+- Gemma referee is ~1.7 s/span on CPU; a contested page can take minutes
+- Line-granularity spans: hiding a line hides its label too

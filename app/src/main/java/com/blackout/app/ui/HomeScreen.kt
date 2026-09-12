@@ -134,7 +134,7 @@ fun HomeScreen(
         Spacer(Modifier.height(20.dp))
 
         Text(
-            text = stringResource(R.string.v0_notice),
+            text = stringResource(R.string.home_footer),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
