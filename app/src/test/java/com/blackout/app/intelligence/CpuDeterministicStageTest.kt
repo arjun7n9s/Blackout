@@ -6,6 +6,7 @@ import com.blackout.app.ocr.SpanRole
 import com.blackout.app.ocr.TextSpan
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -212,10 +213,29 @@ class CpuDeterministicStageTest {
     }
 
     @Test
-    fun `an amount that looks like a phone number is left to the models`() {
+    fun `a captioned balance hides as money, never as a phone number`() {
         nextId = 1
         val spans = listOf(
             span("Closing Balance", 60, 500, 260),
+            span("Rs 1,20,45,000", 520, 500, 260),
+        )
+        val (applied, result) = analyse(spans)
+        val decision = result.decisions[applied.first { it.text == "Rs 1,20,45,000" }.id]
+
+        // A balance is a fact about someone's finances, so the caption is enough to settle it
+        // without a model. An uncaptioned amount still is not - see the invoice case below.
+        assertNotNull(decision)
+        assertEquals(Action.HIDE, decision!!.action)
+        // The original point of this case: PHONE matches any 8-13 grouped digits, so it must not
+        // be what claims an amount.
+        assertFalse("claimed as a phone number: ${decision.reason}", decision.reason.orEmpty().contains("PHONE"))
+    }
+
+    @Test
+    fun `an invoice total is still left to the models`() {
+        nextId = 1
+        val spans = listOf(
+            span("Grand Total", 60, 500, 260),
             span("Rs 1,20,45,000", 520, 500, 260),
         )
         val (applied, result) = analyse(spans)

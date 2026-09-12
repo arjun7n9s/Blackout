@@ -184,7 +184,7 @@ class HybridRedactPipeline(
         spans.withIndex().associate { (index, span) ->
             val raw = CandidateHints.detect(span.text)
             val previous = spans.getOrNull(index - 1)?.text
-            span.id to CandidateHints.promoteByNeighbour(raw, previous)
+            span.id to CandidateHints.promoteByNeighbour(raw, previous, span.text)
         }.filterValues { it.isNotEmpty() }
 
     private fun degraded(

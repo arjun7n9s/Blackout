@@ -47,6 +47,61 @@ class CandidateHintsTest {
     }
 
     @Test
+    fun `amounts are weak until a balance or salary caption names them`() {
+        val raw = CandidateHints.detect("Rs 2,08,315.50")
+        assertEquals(HintStrength.WEAK, raw.first { it.kind == HintKind.MONEY }.strength)
+
+        // Caption on the line above.
+        assertEquals(
+            HintStrength.STRONG,
+            CandidateHints.promoteByNeighbour(raw, "Closing Balance")
+                .first { it.kind == HintKind.MONEY }.strength,
+        )
+        // ...or sharing the line, which is how OCR usually returns it.
+        assertEquals(
+            HintStrength.STRONG,
+            CandidateHints.promoteByNeighbour(raw, null, "Net Salary: Rs 2,08,315.50")
+                .first { it.kind == HintKind.MONEY }.strength,
+        )
+    }
+
+    @Test
+    fun `an invoice's own figures stay weak`() {
+        // An amount is normally the point of the document. Hiding these unconditionally is how
+        // C-008 turned into a black slab, so only a personal-finance caption promotes.
+        val raw = CandidateHints.detect("Rs 1,24,500.00")
+        for (caption in listOf("Total", "Amount Due", "Subtotal", "Price", "Grand Total", null)) {
+            assertEquals(
+                "caption=$caption",
+                HintStrength.WEAK,
+                CandidateHints.promoteByNeighbour(raw, caption)
+                    .first { it.kind == HintKind.MONEY }.strength,
+            )
+        }
+    }
+
+    @Test
+    fun `a part-masked card is still a card`() {
+        // Verbatim from testdoc-bank, where it leaked: CARD needs 13-19 unbroken digits, so the
+        // way a statement actually prints one matched nothing.
+        val hints = CandidateHints.detect("Card 5012 **** 1234 POS")
+        val card = hints.firstOrNull { it.kind == HintKind.CARD }
+        assertEquals(HintStrength.STRONG, card?.strength)
+
+        for (text in listOf("XXXX XXXX XXXX 4242", "•••• 4242", "4242 xxxx xxxx 1881")) {
+            assertTrue(text, CandidateHints.detect(text).any { it.kind == HintKind.CARD })
+        }
+    }
+
+    @Test
+    fun `masking alone is not a card`() {
+        // Both halves have to be there, or a row of asterisks and an ordinary pair of numbers
+        // both become card numbers.
+        assertTrue(CandidateHints.detect("**** ****").none { it.kind == HintKind.CARD })
+        assertTrue(CandidateHints.detect("12 34").none { it.kind == HintKind.CARD })
+    }
+
+    @Test
     fun `generic label produces nothing`() {
         assertTrue(CandidateHints.detect("Full Name").isEmpty())
         assertTrue(CandidateHints.detect("GOVERNMENT OF INDIA").isEmpty())

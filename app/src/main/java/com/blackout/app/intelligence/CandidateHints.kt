@@ -56,6 +56,20 @@ object CandidateHints {
     // 13-19 digits with optional separators; validated with Luhn before it counts
     private val CARD = Regex("""(?<!\d)(?:\d[ \-]?){12,18}\d(?!\d)""")
 
+    /** Characters a statement uses to blank out the middle of a card number. */
+    private const val MASK_CHARS = "*xX•×#"
+
+    /**
+     * A part-masked card: at least two groups, mixing digits and mask characters.
+     *
+     * Matches "5012 **** 1234", "XXXX XXXX XXXX 4242", "•••• 4242". The digit/mask counts are
+     * checked at the call site rather than in the pattern, because doing it here would need
+     * lookaheads that make the expression unreadable for no gain.
+     */
+    private val MASKED_CARD = Regex(
+        """(?<![A-Za-z0-9])[0-9*xX•×#]{2,6}(?:[\s\-][0-9*xX•×#]{2,6}){1,5}(?![A-Za-z0-9])"""
+    )
+
     private val ACCOUNT = Regex("""(?i)\b(?:a/?c|acct|account|ifsc|iban)\b[\s:.#\-]*([A-Z0-9]{6,24})""")
 
     // RBI IFSC: 4-letter bank code, a reserved 0, 6-char branch code. Printed bare next to an
@@ -123,6 +137,25 @@ object CandidateHints {
             }
         }
 
+        // A card that has already been masked is still a card.
+        //
+        // [CARD] needs an unbroken run of 13-19 digits, so "Card 5012 **** 1234 POS" - the way a
+        // statement actually prints one - matched nothing at all and went to the models, which
+        // left it visible. Masking hides the middle digits, never the fact that this is a card
+        // number, and the surviving digits are the ones that identify the account.
+        //
+        // STRONG without a checksum: there are not enough digits left to run Luhn over, and the
+        // mask itself is the evidence.
+        MASKED_CARD.findAll(text).forEach { m ->
+            val value = m.value.trim()
+            val digits = value.count(Char::isDigit)
+            val masked = value.count { it in MASK_CHARS }
+            // Both halves must be present, or this is just a number or just a row of asterisks.
+            if (digits < 4 || masked < 2) return@forEach
+            if (out.any { it.kind == HintKind.CARD && it.matched.contains(value) }) return@forEach
+            out += CandidateHint(HintKind.CARD, value, HintStrength.STRONG)
+        }
+
         // Phone last, and only where nothing stronger already claimed the same digits.
         val claimed = out.mapTo(mutableSetOf()) { it.matched.filter(Char::isDigit) }
             .filter { it.isNotEmpty() }
@@ -144,20 +177,56 @@ object CandidateHints {
     }
 
     /**
-     * Promotes a WEAK DATE to STRONG when the preceding line looks like a date-of-birth label.
+     * Promotes a WEAK hint to STRONG when its own line, or the line above, names what it is.
      *
      * This is what separates a bare "14/03/1988" (someone's DOB) from a form's print date: the
-     * digits are identical, only the neighbour disambiguates them.
+     * digits are identical, only the caption disambiguates them.
+     *
+     * MONEY works the same way and for the same reason. An amount is usually the *point* of a
+     * document - an invoice is nothing but amounts - so hiding every one of them is how `C-008`
+     * turned into a black slab. But a figure captioned "Closing Balance" or "Net Salary" is a
+     * fact about a person's finances rather than about the transaction, and that caption is
+     * exactly the evidence needed to tell the two apart. So a balance or salary is hidden and an
+     * invoice line item is not, without either of them going near a model.
+     *
+     * @param line the span's own text - a caption and its value often share one OCR line.
      */
-    fun promoteByNeighbour(hints: List<CandidateHint>, previousLine: String?): List<CandidateHint> {
-        if (previousLine == null || hints.none { it.kind == HintKind.DATE }) return hints
-        if (!DOB_LABEL.containsMatchIn(previousLine)) return hints
+    fun promoteByNeighbour(
+        hints: List<CandidateHint>,
+        previousLine: String?,
+        line: String? = null,
+    ): List<CandidateHint> {
+        val context = listOfNotNull(previousLine, line).joinToString("\n")
+        if (context.isBlank()) return hints
+
+        val dob = hints.any { it.kind == HintKind.DATE } && DOB_LABEL.containsMatchIn(context)
+        val balance = hints.any { it.kind == HintKind.MONEY } && MONEY_LABEL.containsMatchIn(context)
+        if (!dob && !balance) return hints
+
         return hints.map {
-            if (it.kind == HintKind.DATE) it.copy(strength = HintStrength.STRONG) else it
+            when {
+                dob && it.kind == HintKind.DATE -> it.copy(strength = HintStrength.STRONG)
+                balance && it.kind == HintKind.MONEY -> it.copy(strength = HintStrength.STRONG)
+                else -> it
+            }
         }
     }
 
     private val DOB_LABEL = Regex("""(?i)\b(d\.?o\.?b|date\s+of\s+birth|birth\s*date|born|जन्म)\b""")
+
+    /**
+     * Captions that make an amount personal rather than transactional.
+     *
+     * Deliberately excludes "total", "amount", "subtotal", "price", "due" and the like - those
+     * caption an invoice's own figures, which stay readable.
+     */
+    private val MONEY_LABEL = Regex(
+        """(?i)\b(?:""" +
+            """(?:closing|opening|available|current|account|avl)\s+bal(?:ance)?|bal(?:ance)?\s*[:.]|""" +
+            """net\s+(?:pay|salary)|gross\s+(?:pay|salary)|take[\s\-]?home|""" +
+            """salary|wages|income|ctc|credit\s+limit""" +
+            """)\b"""
+    )
 
     fun hasStrong(hints: List<CandidateHint>): Boolean =
         hints.any { it.strength == HintStrength.STRONG }

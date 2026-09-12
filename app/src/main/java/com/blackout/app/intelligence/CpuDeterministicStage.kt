@@ -134,10 +134,14 @@ object CpuDeterministicStage {
     /**
      * The hint kinds we are willing to act on without a model.
      *
-     * Deliberately narrower than "any STRONG hint": DATE, MONEY, PIN, IP and URL are excluded
-     * because a transaction date or an amount is normally the *point* of the document. A DATE
-     * only qualifies once [CandidateHints.promoteByNeighbour] has seen a date-of-birth caption
-     * above it, which is what makes it STRONG.
+     * Deliberately narrower than "any STRONG hint": PIN, IP and URL are excluded outright, and
+     * DATE and MONEY only qualify once [CandidateHints.promoteByNeighbour] has seen a caption
+     * naming them - which is the only thing that makes either STRONG.
+     *
+     * That gate is the whole point for both. A bare date is a print date; captioned "Date of
+     * Birth" it is personal. An amount is normally what the document is *for* - an invoice is
+     * nothing but amounts - but captioned "Closing Balance" or "Net Salary" it is a fact about
+     * someone's finances. Hiding every amount unconditionally is how `C-008` became a black slab.
      */
     private val CERTAIN_KINDS = setOf(
         HintKind.EMAIL,
@@ -150,6 +154,7 @@ object CpuDeterministicStage {
         HintKind.CARD,
         HintKind.PHONE,
         HintKind.DATE,
+        HintKind.MONEY,
     )
 
     private fun certainIdentifier(span: TextSpan, hints: List<CandidateHint>): HintKind? {
