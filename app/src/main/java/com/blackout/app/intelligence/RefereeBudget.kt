@@ -29,6 +29,40 @@ import com.blackout.app.ocr.TextSpan
  */
 object RefereeBudget {
 
+    /**
+     * What the interactive path is allowed to cost, end to end.
+     *
+     * The referee cannot fit inside this and never will: measured `referee_ms` on this handset
+     * runs 3877-11646 ms on ordinary pages and 174627 ms on C-015. Everything else in the
+     * pipeline together - OCR, the deterministic detectors, the geometry pass and the NPU
+     * workhorse - has measured at 200-850 ms, so the budget is met by leaving exactly one stage
+     * out.
+     *
+     * That is a product decision, not a quality one. The referee still earns its keep on the
+     * pages where C measured it winning (`C-001`, `C-017`), so it is not deleted - it moves
+     * behind [refine], run on demand against a result the user is already looking at.
+     */
+    const val INTERACTIVE_BUDGET_MS = 1000L
+
+    private const val INTERACTIVE_SKIP =
+        "interactive budget: ${INTERACTIVE_BUDGET_MS}ms (referee measures 3.9-11.6s); refine to run it"
+
+    /**
+     * The skip reason for a page being analysed for immediate display.
+     *
+     * @param refine true when the user explicitly asked for the slow, better answer - then the
+     *   page-shape vetoes in [skipReason] still apply, because those are about the referee making
+     *   the page *worse*, and no amount of waiting fixes that.
+     */
+    fun interactiveSkipReason(
+        refine: Boolean,
+        spanCount: Int,
+        medianSpanHeight: Int,
+        imageHeight: Int,
+    ): String? =
+        if (!refine) INTERACTIVE_SKIP
+        else skipReason(spanCount, medianSpanHeight, imageHeight)
+
     /** C-015: 141 spans, referee_ms=174627, and it made the page *less* redacted. */
     const val DENSE_SPAN_LIMIT = 100
 

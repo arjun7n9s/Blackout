@@ -44,6 +44,30 @@ class GpuLlmCascadeStage(
     private var refereeRuntime: LlmRuntime? = null
 
     /**
+     * Load the workhorse now, so the first page does not pay for it.
+     *
+     * Measured on this handset: `Qwen3-0.6B-w4a16 (Genie) ready on Hexagon in 1574ms`. That load
+     * used to land inside the first analysis, which is why a cold page measured ~2.7 s wall and a
+     * warm one 749 ms for identical work. The weights are not needed until the user has framed and
+     * taken a photo, so there is no reason for the wait to be theirs.
+     *
+     * Safe to call repeatedly and from anywhere; [run] shares the same cached instance under the
+     * same lock, so a capture arriving mid-preload waits for it rather than starting a second one.
+     */
+    @Synchronized
+    fun preload() {
+        if (workhorseRuntime != null) return
+        val file = catalog.locate(ModelCatalog.QWEN) ?: return
+        workhorseRuntime = runCatching { acquireWorkhorse(file) }
+            .onFailure { Log.w(TAG, "preload failed, will retry on first page: ${it.message}") }
+            .getOrNull()
+    }
+
+    @Synchronized
+    private fun workhorse(file: java.io.File): LlmRuntime =
+        workhorseRuntime ?: acquireWorkhorse(file).also { workhorseRuntime = it }
+
+    /**
      * @param queue spans still undecided after the CPU (and, one day, NPU) stages.
      * @param allSpans every span on the page - used for neighbour context only, never re-judged.
      * @param refereeSkipReason non-null when [RefereeBudget] vetoed the referee for this page.
@@ -58,9 +82,11 @@ class GpuLlmCascadeStage(
         val workhorseFile = catalog.locate(ModelCatalog.QWEN)
             ?: throw Unavailable("workhorse weights not found in ${catalog.modelsDir().name}/")
 
-        val workhorse = workhorseRuntime ?: try {
-            onStage(AnalysisStage.LoadingModel(ModelCatalog.QWEN.displayName))
-            acquireWorkhorse(workhorseFile).also { workhorseRuntime = it }
+        val workhorse = try {
+            if (workhorseRuntime == null) {
+                onStage(AnalysisStage.LoadingModel(ModelCatalog.QWEN.displayName))
+            }
+            workhorse(workhorseFile)
         } catch (t: Throwable) {
             Log.e(TAG, "workhorse load failed", t)
             throw Unavailable("could not load ${ModelCatalog.QWEN.displayName}")
@@ -325,7 +351,7 @@ class GpuLlmCascadeStage(
             // Same protocol split as the workhorse: the NPU referee gets a hide-list, the GPU
             // referee gets constrained JSON with reasons.
             val json = runtime.supportsJsonSchema
-            val batch = Prompts.refereeBatch(batchSpans, neighbours, hints, docSummary)
+            val batch = Prompts.refereeBatch(batchSpans, neighbours, hints, docSummary, tagged = !json)
             val reply = runCatching {
                 runtime.generate(
                     system = if (json) Prompts.REFEREE_SYSTEM else Prompts.REFEREE_SYSTEM_HIDELIST,

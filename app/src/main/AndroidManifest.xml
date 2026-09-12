@@ -43,10 +43,14 @@
         <uses-native-library android:name="libQnnIr.so" android:required="false" />
         <uses-native-library android:name="libQnnSaver.so" android:required="false" />
 
+        <!-- singleTop: re-sharing an image into an already-open Blackout should reuse the
+             activity, not stack a second copy holding a second capture. It is also what makes
+             onNewIntent fire, which the debug fixture harness needs to run a page warm. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:theme="@style/Theme.Blackout">
             <intent-filter>

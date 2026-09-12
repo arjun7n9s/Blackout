@@ -65,10 +65,23 @@ class HybridRedactPipeline(
     private val cascade = GpuLlmCascadeStage(context, catalog, runtimeFactory)
     private val npu = NpuClassifyStage(context)
 
+    /**
+     * Warm the workhorse before a page arrives. Call as early as the app can afford to.
+     *
+     * Loading it lazily put ~1.6 s of engine startup inside the first analysis, which is the
+     * difference between hitting [RefereeBudget.INTERACTIVE_BUDGET_MS] and missing it by 2x.
+     */
+    suspend fun preload() = withContext(dispatcher) { cascade.preload() }
+
+    /**
+     * @param refine run the referee too. Off by default: the interactive path holds a
+     *   [RefereeBudget.INTERACTIVE_BUDGET_MS] budget and the referee cannot fit in it.
+     */
     suspend fun analyze(
         rawSpans: List<TextSpan>,
         imageWidth: Int,
         imageHeight: Int,
+        refine: Boolean = false,
         onStage: (AnalysisStage) -> Unit = {},
     ): AnalysisResult = withContext(dispatcher) {
         if (rawSpans.isEmpty()) return@withContext AnalysisResult.Empty
@@ -117,7 +130,8 @@ class HybridRedactPipeline(
 
         // ---- D. GPU: Qwen -> Gemma over the leftovers only --------------------------------
         val medianHeight = RefereeBudget.medianSpanHeight(spans)
-        val refereeSkip = RefereeBudget.skipReason(spans.size, medianHeight, imageHeight)
+        val refereeSkip =
+            RefereeBudget.interactiveSkipReason(refine, spans.size, medianHeight, imageHeight)
         if (refereeSkip != null) Log.i(TAG, "referee vetoed: $refereeSkip")
 
         val stages = mutableListOf(cpuReport, npuOutcome.report)

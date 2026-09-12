@@ -25,6 +25,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import com.blackout.app.ui.RedactViewModel
 import com.blackout.app.ui.rememberCameraPermissionState
 import com.blackout.app.ui.theme.BlackoutTheme
 import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -64,6 +66,21 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Does the Gemma file we already ship actually do vision on this device?
+        //   adb shell am start -n com.blackout.app/.MainActivity --ez vlm_probe true
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("vlm_probe", false) == true) {
+            val fixture = intent.getStringExtra("fixture")
+            lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+                val r = com.blackout.app.intelligence.VlmProbe.run(applicationContext, fixture)
+                android.util.Log.i(
+                    "BlackoutVlm",
+                    "PROBE RESULT ok=${r.ok} declaresVision=${r.declaresVision} " +
+                        "visionTokenBudget=${r.visionTokenBudget} ms=${r.elapsedMs} " +
+                        "detail=${r.detail} reply=${r.reply.take(200)}",
+                )
+            }
+        }
+
         // Read-only vendor-camera reconnaissance:
         //   adb shell am start -n com.blackout.app/.MainActivity --ez cam_probe true
         if (BuildConfig.DEBUG && intent?.getBooleanExtra("cam_probe", false) == true) {
@@ -71,15 +88,36 @@ class MainActivity : ComponentActivity() {
         }
 
         val shared = incomingImage(intent)
-        val fixture = debugFixture(intent)
+        fixtures.value = debugFixture(intent)
         setContent {
             BlackoutTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
+                    val fixture by fixtures.collectAsState()
                     BlackoutApp(sharedImage = shared, fixture = fixture)
                 }
             }
         }
     }
+
+    /**
+     * A second `--es fixture` into an already-running app re-runs it *warm*.
+     *
+     * Without this the activity is already on top, `onCreate` never fires again, and the intent is
+     * silently swallowed - which made every scripted measurement a cold one, with ~1.8 s of engine
+     * load folded into a number that was supposed to be inference.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        debugFixture(intent)?.let { fixtures.value = it }
+    }
+
+    /**
+     * Latest debug fixture to analyse. A [MutableStateFlow] rather than a plain value so a second
+     * intent reaches the composition; emitting the same bitmap twice is fine because the flow only
+     * ever holds the newest one.
+     */
+    private val fixtures = MutableStateFlow<Bitmap?>(null)
 
     /**
      * Debug-only: run a pushed image straight through the pipeline, no picker, no URI grant.
@@ -95,6 +133,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun debugFixture(intent: Intent?): Bitmap? {
         if (!BuildConfig.DEBUG) return null
+        // The VLM probe borrows the same `fixture` extra to pick its image; don't also start a
+        // redact run on top of it.
+        if (intent?.getBooleanExtra("vlm_probe", false) == true) return null
         val name = intent?.getStringExtra("fixture") ?: return null
         val dir = File(getExternalFilesDir(null), FIXTURE_DIR)
         // The app has to make this directory itself. One created by `adb shell mkdir`, or

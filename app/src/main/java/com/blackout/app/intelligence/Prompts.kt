@@ -75,20 +75,44 @@ object Prompts {
      * JSON and hoping, we ask a smaller question: list the ids to hide. Everything unlisted is
      * kept. Fewer output tokens than JSON, and far less for a 0.6B to get structurally wrong.
      */
+    /**
+     * Lines are tagged with **letters**, and the reply is letters.
+     *
+     * Numbering them was a silent correctness bug. Asked for "the numbers of the lines to hide"
+     * over a bank statement, Qwen3-0.6B replied:
+     *
+     * ```
+     * 42 560038 01 2026-31 124500 208315 560038 03 420
+     * ```
+     *
+     * It had answered a different, entirely reasonable question - *which numbers on this page are
+     * sensitive* - returning a PIN code, an amount, a balance. [HideListParser] then kept whatever
+     * fell inside the batch's id range, so the fragments `01` and `03` became "hide line 1 and
+     * line 3". Two spans redacted for no reason, nothing logged, and the hide count looked
+     * plausible.
+     *
+     * Line labels and page content shared one symbol space, so no prompt wording could reliably
+     * separate them. Letters remove the ambiguity by construction: a document is full of digits
+     * and never full of bare capitals, so a digit in the reply is now obviously not a label.
+     * It is also shorter to decode - the verbose numeric replies above cost 43-48 tokens per
+     * batch at ~100 tok/s, which was most of the workhorse's latency.
+     */
     val WORKHORSE_SYSTEM_HIDELIST = """
         You redact documents before sharing. Lines are in reading order, so a value usually
         follows its label.
         Hide private data: person names, addresses, phone, email, ID/Aadhaar/PAN/passport
         numbers, card or account numbers, date of birth, medical info, salary or balances.
         Keep generic text: headings, field labels, form captions, company or product names.
+        Each line is tagged with a capital letter. Reply with those letters only.
         Examples:
-        "Account Holder" -> keep (it is a label)
-        "Priya Ramachandran" -> hide (a person's name)
-        "PAN" -> keep (a label)
-        "ABCDE1234F" -> hide (an ID number)
-        Reply with ONLY the numbers of the lines to hide, separated by spaces.
+        "A: Account Holder" -> keep (it is a label)
+        "B: Priya Ramachandran" -> hide (a person's name), so reply includes B
+        "C: PAN" -> keep (a label)
+        "D: ABCDE1234F" -> hide (an ID number), so reply includes D
+        For those four lines the correct reply is exactly: B D
+        Reply with ONLY the letters of the lines to hide, separated by spaces.
+        Never reply with numbers or with text copied from the document.
         If nothing should be hidden reply exactly: none
-        No words, no punctuation, no explanation.
     """.trimIndent()
 
     val REFEREE_SYSTEM = """
@@ -112,9 +136,10 @@ object Prompts {
         A smaller model was unsure about these lines, or disagreed with a pattern match.
         Hide anything identifying a specific person, account, address or amount.
         Keep generic labels, headings, issuer names and boilerplate.
-        Reply with ONLY the numbers of the lines to hide, separated by spaces.
+        Each line is tagged with a capital letter. Reply with those letters only.
+        Reply with ONLY the letters of the lines to hide, separated by spaces.
+        Never reply with numbers or with text copied from the document.
         If nothing should be hidden reply exactly: none
-        No words, no punctuation, no explanation.
     """.trimIndent()
 
     private val SUMMARY_SYSTEM = """
@@ -201,20 +226,34 @@ object Prompts {
             spans.forEachIndexed { index, span ->
                 val local = index + 1
                 mapping[local] = span.id
-                appendLine("$local: " + clip(span.text))
+                appendLine("${letterFor(local)}: " + clip(span.text))
             }
             if (!below.isNullOrBlank()) appendLine("below: " + clip(below))
-            append("\nNumbers to hide (or none):")
+            append("\nLetters to hide (or none):")
         }
         return Batch(body, mapping)
     }
 
+    /**
+     * Local id 1..N as a tag the model cannot confuse with page content. See
+     * [WORKHORSE_SYSTEM_HIDELIST] for why this is not a number.
+     *
+     * Only ever called with ids up to [WORKHORSE_BATCH], well inside A-Z.
+     */
+    fun letterFor(localId: Int): Char = 'A' + (localId - 1)
+
     /** Renders a referee batch: escalated lines, their hint tags, and the document type. */
+    /**
+     * @param tagged label lines A, B, C rather than 1, 2, 3 - required whenever the reply is a
+     *   hide-list rather than JSON, so the tags cannot collide with digits on the page. See
+     *   [WORKHORSE_SYSTEM_HIDELIST].
+     */
     fun refereeBatch(
         spans: List<TextSpan>,
         neighbours: Map<Int, String>,
         hints: Map<Int, List<CandidateHint>>,
         docSummary: String?,
+        tagged: Boolean = false,
     ): Batch {
         val mapping = LinkedHashMap<Int, Int>(spans.size)
         val body = buildString {
@@ -225,7 +264,8 @@ object Prompts {
             spans.forEachIndexed { index, span ->
                 val local = index + 1
                 mapping[local] = span.id
-                append(local).append(": ").append(clip(span.text))
+                append(if (tagged) letterFor(local).toString() else local.toString())
+                append(": ").append(clip(span.text))
                 val tags = hints[span.id].orEmpty().map { it.kind.label }.distinct()
                 if (tags.isNotEmpty()) tags.joinTo(this, ",", " [", "]")
                 // Prefer the paired field caption over the raw neighbour blob. "label: PAN" tells
@@ -242,7 +282,11 @@ object Prompts {
                 }
                 append('\n')
             }
-            append("\nJSON for ids 1-").append(spans.size)
+            if (tagged) {
+                append("\nLetters to hide (or none):")
+            } else {
+                append("\nJSON for ids 1-").append(spans.size)
+            }
         }
         return Batch(body, mapping)
     }

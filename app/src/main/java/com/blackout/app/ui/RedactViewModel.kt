@@ -89,6 +89,12 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
     var original: Bitmap? = null
         private set
 
+    init {
+        // The user is still framing a photo; spend that time loading the engine instead of
+        // making them wait for it after the shutter.
+        viewModelScope.launch { runCatching { pipeline.preload() } }
+    }
+
     fun modelInventory(): String = catalog.describe()
 
     /** Why the NPU stage is skipped on this device. Debug panel only. */
@@ -104,6 +110,10 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         viewModelScope.launch {
+            // Wall clock from "user handed us a bitmap" to "bars are on screen". The stage
+            // timings the pipeline reports exclude OCR and deskew, so they flatter the number
+            // the user actually waits through; this is the one measured against the budget.
+            val wallStart = System.currentTimeMillis()
             val firstPass: OcrResult = runCatching { ocr.recognize(bitmap) }
                 .getOrElse { OcrResult.empty(bitmap.width, bitmap.height) }
 
@@ -156,11 +166,15 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
 
             // Merge the layout-applied spans. Using the raw OCR list here is how FieldLayout
             // compiled and still left every caption STANDALONE - LAYOUT KEEP never fired.
-            applyAnalysis(analysis.spans.ifEmpty { result.spans }, analysis)
+            applyAnalysis(analysis.spans.ifEmpty { result.spans }, analysis, wallStart)
         }
     }
 
-    private fun applyAnalysis(spans: List<TextSpan>, analysis: AnalysisResult) {
+    private fun applyAnalysis(
+        spans: List<TextSpan>,
+        analysis: AnalysisResult,
+        wallStart: Long = 0L,
+    ) {
         val decisions = MergePolicy.merge(
             spans = spans,
             workhorse = analysis.workhorse,
@@ -170,7 +184,7 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
             userOverrides = emptyMap(),
             degraded = analysis.degraded,
         )
-        logStats(spans, analysis, decisions)
+        logStats(spans, analysis, decisions, wallStart)
         _state.update {
             it.copy(
                 phase = Phase.READY,
@@ -196,6 +210,7 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
         spans: List<TextSpan>,
         analysis: AnalysisResult,
         decisions: Map<Int, SpanDecision>,
+        wallStart: Long = 0L,
     ) {
         fun ms(label: String) = analysis.stats.firstOrNull { it.label == label }?.elapsedMs ?: 0L
         val backend = analysis.hudBackend ?: "none"
@@ -204,6 +219,8 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
         Log.i(
             STATS_TAG,
             "spans=${spans.size} ocr_ms=${_state.value.ocrMs} " +
+                // The number the budget is judged on: everything the user waits through.
+                "wall_ms=${if (wallStart > 0) System.currentTimeMillis() - wallStart else -1} " +
                 "deskew=${"%.1f".format(_state.value.deskewDeg)} " +
                 // Stage ownership, so a soak run can see the CPU/GPU split without the debug panel.
                 "cpu_det=${analysis.deterministic.size} llm_spans=$llmSpans " +
