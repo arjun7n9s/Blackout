@@ -68,6 +68,29 @@ object Prompts {
         Reply with JSON only: {"decisions":[{"id":1,"a":"hide"}]}
     """.trimIndent()
 
+    /**
+     * Workhorse instruction for runtimes that cannot do constrained decoding - i.e. the NPU.
+     *
+     * Genie/QAIRT rejects grammar-constrained generation on this SoC, so instead of asking for
+     * JSON and hoping, we ask a smaller question: list the ids to hide. Everything unlisted is
+     * kept. Fewer output tokens than JSON, and far less for a 0.6B to get structurally wrong.
+     */
+    val WORKHORSE_SYSTEM_HIDELIST = """
+        You redact documents before sharing. Lines are in reading order, so a value usually
+        follows its label.
+        Hide private data: person names, addresses, phone, email, ID/Aadhaar/PAN/passport
+        numbers, card or account numbers, date of birth, medical info, salary or balances.
+        Keep generic text: headings, field labels, form captions, company or product names.
+        Examples:
+        "Account Holder" -> keep (it is a label)
+        "Priya Ramachandran" -> hide (a person's name)
+        "PAN" -> keep (a label)
+        "ABCDE1234F" -> hide (an ID number)
+        Reply with ONLY the numbers of the lines to hide, separated by spaces.
+        If nothing should be hidden reply exactly: none
+        No words, no punctuation, no explanation.
+    """.trimIndent()
+
     val REFEREE_SYSTEM = """
         You are a privacy reviewer settling ambiguous redaction calls.
         A smaller model was unsure about these lines, or disagreed with a pattern match.
@@ -142,6 +165,29 @@ object Prompts {
             }
             if (!below.isNullOrBlank()) append("below: ").append(clip(below)).append('\n')
             append("\nJSON for ids 1-").append(spans.size).append(" /no_think")
+        }
+        return Batch(body, mapping)
+    }
+
+    /**
+     * Same batch, asking for a bare id list instead of JSON. Used on the NPU path.
+     */
+    fun workhorseHideListBatch(
+        spans: List<TextSpan>,
+        above: String? = null,
+        below: String? = null,
+    ): Batch {
+        val mapping = LinkedHashMap<Int, Int>(spans.size)
+        val body = buildString {
+            if (!above.isNullOrBlank()) appendLine("above: " + clip(above))
+            appendLine("Lines:")
+            spans.forEachIndexed { index, span ->
+                val local = index + 1
+                mapping[local] = span.id
+                appendLine("$local: " + clip(span.text))
+            }
+            if (!below.isNullOrBlank()) appendLine("below: " + clip(below))
+            append("\nNumbers to hide (or none):")
         }
         return Batch(body, mapping)
     }

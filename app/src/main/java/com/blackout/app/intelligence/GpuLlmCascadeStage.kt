@@ -2,6 +2,7 @@ package com.blackout.app.intelligence
 
 import android.content.Context
 import android.util.Log
+import com.blackout.app.intelligence.npu.GenieNpuRuntime
 import com.blackout.app.ocr.TextSpan
 import java.io.File
 
@@ -57,11 +58,9 @@ class GpuLlmCascadeStage(
         val workhorseFile = catalog.locate(ModelCatalog.QWEN)
             ?: throw Unavailable("workhorse weights not found in ${catalog.modelsDir().name}/")
 
-        val workhorse = try {
+        val workhorse = workhorseRuntime ?: try {
             onStage(AnalysisStage.LoadingModel(ModelCatalog.QWEN.displayName))
-            workhorseRuntime ?: runtimeFactory(ModelCatalog.QWEN, workhorseFile).also {
-                it.load(); workhorseRuntime = it
-            }
+            acquireWorkhorse(workhorseFile).also { workhorseRuntime = it }
         } catch (t: Throwable) {
             Log.e(TAG, "workhorse load failed", t)
             throw Unavailable("could not load ${ModelCatalog.QWEN.displayName}")
@@ -130,6 +129,30 @@ class GpuLlmCascadeStage(
         return Outcome(workhorseDecisions, refereeDecisions, docSummary, stats, reports)
     }
 
+    /**
+     * Hexagon first, LiteRT second.
+     *
+     * The NPU runs the same Qwen3-0.6B at ~130 tok/s decode against LiteRT's ~7.6 s for a
+     * 19-span pass, so it is the preferred workhorse whenever the side-loaded Genie bundle is
+     * present. Both paths prove themselves with a warm-up generation before reporting a backend,
+     * so a missing or broken NPU degrades silently to the GPU/CPU cascade rather than lying.
+     */
+    private fun acquireWorkhorse(workhorseFile: java.io.File): LlmRuntime {
+        val bundle = GenieNpuRuntime.locate(context)
+        if (bundle != null) {
+            val npu = GenieNpuRuntime(context, bundle)
+            try {
+                npu.load()
+                Log.i(TAG, "workhorse on Hexagon: ${npu.displayName} (${npu.backendLabel})")
+                return npu
+            } catch (t: Throwable) {
+                Log.w(TAG, "NPU workhorse unavailable, falling back to LiteRT: ${t.message}")
+                runCatching { npu.close() }
+            }
+        }
+        return runtimeFactory(ModelCatalog.QWEN, workhorseFile).also { it.load() }
+    }
+
     private fun report(
         task: String,
         runtime: LlmRuntime,
@@ -165,24 +188,33 @@ class GpuLlmCascadeStage(
             onStage(AnalysisStage.Workhorse(index + 1, batches.size))
             val firstIdx = allSpans.indexOfFirst { it.id == batchSpans.first().id }
             val lastIdx = allSpans.indexOfFirst { it.id == batchSpans.last().id }
-            val batch = Prompts.workhorseBatch(
-                spans = batchSpans,
-                above = allSpans.getOrNull(firstIdx - 1)?.text,
-                below = allSpans.getOrNull(lastIdx + 1)?.text,
-            )
+            // The NPU runtime cannot pin a reply shape, so it gets the bare hide-list protocol
+            // and its own parser. Everything downstream is identical.
+            val json = runtime.supportsJsonSchema
+            val above = allSpans.getOrNull(firstIdx - 1)?.text
+            val below = allSpans.getOrNull(lastIdx + 1)?.text
+            val batch = if (json) {
+                Prompts.workhorseBatch(batchSpans, above, below)
+            } else {
+                Prompts.workhorseHideListBatch(batchSpans, above, below)
+            }
             val reply = runCatching {
                 runtime.generate(
-                    system = Prompts.WORKHORSE_SYSTEM,
+                    system = if (json) Prompts.WORKHORSE_SYSTEM else Prompts.WORKHORSE_SYSTEM_HIDELIST,
                     prompt = batch.prompt,
-                    schema = Prompts.decisionSchema(batchSpans.size),
-                    maxOutputTokens = ModelCatalog.QWEN.maxOutputTokens,
+                    schema = if (json) Prompts.decisionSchema(batchSpans.size) else null,
+                    maxOutputTokens = if (json) ModelCatalog.QWEN.maxOutputTokens else 48,
                 )
             }.getOrElse {
                 Log.w(TAG, "workhorse batch ${index + 1} failed: ${it.message}")
                 return@forEachIndexed
             }
 
-            val local = DecisionParser.parse(reply, batch.localIds, DecisionSource.WORKHORSE)
+            val local = if (json) {
+                DecisionParser.parse(reply, batch.localIds, DecisionSource.WORKHORSE)
+            } else {
+                HideListParser.parse(reply, batch.localIds, DecisionSource.WORKHORSE)
+            }
             for ((localId, decision) in local) {
                 val globalId = batch.localToGlobal[localId] ?: continue
                 out[globalId] = decision.copy(id = globalId)

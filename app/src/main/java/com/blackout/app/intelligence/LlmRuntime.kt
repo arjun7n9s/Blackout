@@ -17,6 +17,16 @@ import java.io.File
 interface LlmRuntime : AutoCloseable {
     val displayName: String
     val backendLabel: String
+
+    /**
+     * Whether this runtime can pin the reply shape with a JSON schema.
+     *
+     * LiteRT-LM can (`ResponseFormat`). Genie/QAIRT cannot - grammar-constrained generation is
+     * rejected on this SoC - so the NPU path asks for a bare hide-list instead. The cascade picks
+     * the prompt and parser from this flag rather than from the runtime's identity.
+     */
+    val supportsJsonSchema: Boolean get() = true
+
     fun load()
     fun generate(system: String, prompt: String, schema: String?, maxOutputTokens: Int): String
 }
