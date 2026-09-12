@@ -26,7 +26,11 @@ Target handset: **iQOO 15** (OriginOS 6 / Android 16).
 ```
 
 Needs a `local.properties` with `sdk.dir` pointing at your Android SDK (git-ignored; Android
-Studio writes it on first open). Toolchain setup is documented in [DOWNLOADS.md](DOWNLOADS.md).
+Studio writes it on first open).
+
+**Setting this up on your own phone: see [PREREQUISITES.md](PREREQUISITES.md)** — hardware
+requirements, what to download, how to side-load the models, and troubleshooting.
+Toolchain inventory from the original machine is in [DOWNLOADS.md](DOWNLOADS.md).
 
 Everything resolves from the local Gradle cache — `./gradlew --offline :app:assembleDebug`
 builds with no network.

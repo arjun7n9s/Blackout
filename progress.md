@@ -212,3 +212,34 @@ email, address, balances) pushed to the device.
 - Over-redacts field labels on dense forms — conservative, one tap each to fix
 - Gemma referee is ~1.7 s/span on CPU; a contested page can take minutes
 - Line-granularity spans: hiding a line hides its label too
+
+---
+
+## 2026-09-12 · Session 4 — setup docs for other phones
+
+Added [PREREQUISITES.md](PREREQUISITES.md) so the build is reproducible off this machine.
+
+Facts in it were measured rather than assumed:
+
+- **Peak memory 3,454 MB PSS** with both models loaded (sampled via `dumpsys meminfo` across a
+  full cascade) — that's what drives the 6 GB minimum / 8 GB recommended RAM guidance
+- **Degraded path verified** by renaming the weights on device and relaunching: HUD turns red with
+  `degraded · patterns only`, no crash. So the app is usable without the 2.9 GB download
+- **SHA-256 computed for both model files**, so a 2.9 GB push can be checked before it starts
+- Real debug-panel capture used as the "is it working" reference: 47 spans · OCR 169 ms ·
+  Qwen 16.6 s / 5 batches · Gemma summary 1.1 s · Gemma referee 18.8 s / 2 batches / 21 spans ·
+  36.4 s total
+- Re-verified `./gradlew --offline :app:assembleDebug` still builds clean after the LiteRT-LM,
+  viewmodel-compose and junit additions
+
+Note: the workhorse pass got slower (8.2 s → 16.6 s) when the few-shot examples were added to the
+system prompt. Worth it — that change is what fixed mode collapse — but it is a real cost, and the
+system instruction is now the largest fixed part of every batch.
+
+Documented gotchas that cost time here, so they cost nobody else any:
+
+- MSYS path mangling rewrites `/sdcard/...` to `C:/Program Files/Git/sdcard/...`, and
+  `MSYS_NO_PATHCONV=1` then breaks the *local* path too — both directions need care
+- The app must be installed **before** pushing models; the target dir is created at install time
+- `abiFilters` is arm64-only, so x86_64 emulators fail with `INSTALL_FAILED_NO_MATCHING_ABIS`
+- vivo/iQOO/Xiaomi need "USB debugging (Security settings)" plus a reboot
