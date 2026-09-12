@@ -63,6 +63,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Read-only vendor-camera reconnaissance:
+        //   adb shell am start -n com.blackout.app/.MainActivity --ez cam_probe true
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("cam_probe", false) == true) {
+            com.blackout.app.camera.VendorCameraProbe.run(applicationContext)
+        }
+
         val shared = incomingImage(intent)
         setContent {
             BlackoutTheme {
