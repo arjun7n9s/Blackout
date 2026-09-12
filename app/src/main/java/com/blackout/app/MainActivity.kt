@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import androidx.core.content.IntentCompat
+import androidx.lifecycle.lifecycleScope
+import com.blackout.app.intelligence.npu.GenieNpuProbe
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -47,6 +49,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Debug-only NPU proof hook. Never reachable in a release build, never touches the
+        // redact path, and cannot change the HUD:
+        //   adb shell am start -n com.blackout.app/.MainActivity --ez npu_probe true
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("npu_probe", false) == true) {
+            lifecycleScope.launch {
+                val r = GenieNpuProbe.run(applicationContext)
+                android.util.Log.i(
+                    "BlackoutNpu",
+                    "PROBE RESULT ok=${r.ok} detail=${r.detail} tokens=${r.tokens} " +
+                        "ms=${r.elapsedMs} tok_per_s=${"%.2f".format(r.tokensPerSecond)}",
+                )
+            }
+        }
+
         val shared = incomingImage(intent)
         setContent {
             BlackoutTheme {

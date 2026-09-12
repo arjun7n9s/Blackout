@@ -203,6 +203,59 @@ the marker is still there next launch, NPU is not attempted again. Because the m
 *which* library crashed, dropping in a different one (the whole point of the AI Hub follow-up)
 re-arms the attempt automatically instead of needing app data cleared.
 
+#### RESOLVED 2026-09-12: real Hexagon tokens, via GenieX
+
+Everything below this heading's original ask-list was reachable without the Qualcomm
+software-centre login that returns 403. Measured on the loaner:
+
+```
+NPU PROBE ok compute=npu tokens=11 elapsed_ms=116 tok_per_s=94.83
+profile=ProfilingData(ttftMs=16.98, promptTokens=36, generatedTokens=12,
+                      prefillSpeed=2120.14, decodingSpeed=130.22, stopReason=eos)
+text: "Gravity is the force that pulls objects toward each other."
+```
+
+**Prefill 2120 tok/s, decode 130 tok/s, TTFT 17 ms** on Qwen3-0.6B w4a16 - the same model the
+GPU path runs as the workhorse, where it takes ~7.6 s for 19 spans.
+
+CDSP proof, from the app's own process (`/proc/<pid>`):
+
+| Evidence | Value |
+|---|---|
+| open fd | **`/dev/fastrpc-cdsp`** - the compute-DSP node |
+| mapped | `libQnnHtpV81Stub.so` (Hexagon **v81**) |
+| mapped | `libQnnHtp.so`, `libQnnSystem.so`, `/vendor/lib64/libcdsprpc.so` |
+| mapped | `libgeniex_plugin_qairt.so` |
+| plugin | `getPluginVersion("qairt")` -> `v2.45.0.260326`, matching the bundle's `tool_versions.qairt` |
+
+**What was actually missing, and where it came from**
+
+| Previously recorded blocker | Resolution |
+|---|---|
+| No `libLiteRtDispatch_Qualcomm.so` | Present all along in `AndroidVendors/litert-npu/{v2.1.5,v2.1.6}/…/qualcomm_runtime_v81/`; only v2.2.0's Gradle stubs had been checked |
+| QAIRT trio unreachable (403) | **`com.qualcomm.qti:geniex-android` is on Maven Central.** Its AAR ships `libQnnHtp.so`, `libQnnHtpV81{,Skel,Stub}.so`, `libQnnSystem.so`, `libQnnHtpPrepare.so`, `libQnnIr.so`, `libQnnSaver.so` |
+| "No SM8850 pack published" | **Wrong.** `qualcomm/Qwen3-0.6B` publishes `qwen3_0_6b-geniex_qairt-w4a16-qualcomm_snapdragon_8_elite_gen5.zip` (643 MB) on public S3, ungated. Snapdragon 8 Elite Gen 5 *is* SM8850 |
+
+Bundle config confirms the target: `soc_model: 87, dsp_arch: v81, perf_profile: burst`.
+
+**Three traps worth recording**
+
+1. `nCtx` **must be 0** for the QAIRT plugin. Context size, sampler and backend all come from the
+   bundle's own `genie_config.json`; passing our own gives `Parameter not supported by this plugin`.
+2. `model_path` is **`genie_config.json`**, not the bundle directory - a directory gives
+   `File not found or inaccessible`.
+3. Side-loading must push **files into an app-created directory**. Anything created by
+   `adb shell mkdir` or implicitly by `adb push <dir>` is owned by `shell`, and the app cannot
+   traverse it: the bundle reads as present but empty.
+
+The 643 MB bundle is side-loaded to `files/npu/`, never bundled in the APK or committed.
+`minSdk` moved 26 -> 27, the floor GenieX imposes.
+
+Still true: **QAIRT grammar/JSON generation fails on device.** When the workhorse moves here it
+must ask for a bounded plain-text hide-list (`1 4 7`), not JSON - which is also cheaper.
+
+---
+
 #### What this phone actually is
 
 ```

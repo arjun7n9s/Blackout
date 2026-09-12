@@ -8,6 +8,7 @@ composeBom = "2026.09.00"
 camerax = "1.6.2"
 mlkitText = "16.0.1"
 litertlm = "0.17.0"
+genieX = "0.4.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,6 +36,9 @@ mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition"
 
 # On-device LLM runtime (LiteRT-LM). Ships liblitertlm_jni.so for arm64-v8a + x86_64.
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
+
+# Qualcomm GenieX: QAIRT/Genie runtime + the full QNN HTP v81 stack (Maven Central, no login).
+geniex-android = { group = "com.qualcomm.qti", name = "geniex-android", version.ref = "genieX" }
 
 junit = { group = "junit", name = "junit", version = "4.13.2" }
 

@@ -17,3 +17,4 @@ tools/testdoc-blur.png
 tools/testdoc-skew*.png
 tools/testdoc-rot*.png
 tools/*_spans.txt
+# NPU bundle is side-loaded, never committed

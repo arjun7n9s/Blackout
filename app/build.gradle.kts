@@ -14,8 +14,10 @@ android {
 
     defaultConfig {
         applicationId = "com.blackout.app"
-        // 26 = adaptive launcher icons, so the icon can be pure vector with no PNG fallbacks.
-        minSdk = 26
+        // 27 is the floor imposed by com.qualcomm.qti:geniex-android, which carries the QNN
+        // HTP runtime. 26 was chosen for adaptive launcher icons; 27 keeps those and costs only
+        // Android 8.0 devices, which cannot run a 0.6B LLM anyway.
+        minSdk = 27
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
@@ -89,6 +91,9 @@ dependencies {
 
     // On-device LLM cascade (Qwen3 workhorse + Gemma referee)
     implementation(libs.litertlm.android)
+
+    // Real Hexagon: QAIRT/Genie runtime, ships libQnnHtp*/V81 for arm64-v8a
+    implementation(libs.geniex.android)
 
     testImplementation(libs.junit)
 }
