@@ -100,6 +100,23 @@ object Prompts {
         Reply with JSON only: {"decisions":[{"id":1,"a":"hide","reason":"personal phone number"}]}
     """.trimIndent()
 
+    /**
+     * Referee instruction for the NPU, which cannot pin a reply shape.
+     *
+     * The referee must arbitrate in BOTH directions - it exists as much to un-hide a wrongly
+     * blacked field label as to catch a missed value. A hide-list does that naturally: listing an
+     * id hides it, omitting one clears it.
+     */
+    val REFEREE_SYSTEM_HIDELIST = """
+        You are a privacy reviewer settling ambiguous redaction calls.
+        A smaller model was unsure about these lines, or disagreed with a pattern match.
+        Hide anything identifying a specific person, account, address or amount.
+        Keep generic labels, headings, issuer names and boilerplate.
+        Reply with ONLY the numbers of the lines to hide, separated by spaces.
+        If nothing should be hidden reply exactly: none
+        No words, no punctuation, no explanation.
+    """.trimIndent()
+
     private val SUMMARY_SYSTEM = """
         Name the document type in at most 8 words (e.g. "Indian Aadhaar card", "bank statement",
         "salary slip", "chat screenshot"). Reply with the phrase only.

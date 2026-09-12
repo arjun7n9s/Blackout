@@ -103,8 +103,8 @@ class GpuLlmCascadeStage(
 
         try {
             onStage(AnalysisStage.LoadingModel(ModelCatalog.GEMMA.displayName))
-            val referee = refereeRuntime ?: runtimeFactory(ModelCatalog.GEMMA, refereeFile)
-                .also { it.load(); refereeRuntime = it }
+            val referee = refereeRuntime ?: acquireReferee(refereeFile)
+                .also { refereeRuntime = it }
 
             onStage(AnalysisStage.Summarising)
             docSummary = runSummary(referee, allSpans, stats)
@@ -140,7 +140,7 @@ class GpuLlmCascadeStage(
     private fun acquireWorkhorse(workhorseFile: java.io.File): LlmRuntime {
         val bundle = GenieNpuRuntime.locate(context)
         if (bundle != null) {
-            val npu = GenieNpuRuntime(context, bundle)
+            val npu = GenieNpuRuntime(context, bundle, "Qwen3-0.6B-w4a16 (Genie)")
             try {
                 npu.load()
                 Log.i(TAG, "workhorse on Hexagon: ${npu.displayName} (${npu.backendLabel})")
@@ -151,6 +151,45 @@ class GpuLlmCascadeStage(
             }
         }
         return runtimeFactory(ModelCatalog.QWEN, workhorseFile).also { it.load() }
+    }
+
+    /**
+     * Gemma first; the Hexagon referee only when Gemma's weights are absent.
+     *
+     * This ordering is the opposite of the workhorse's, and it is a measured decision rather than
+     * an assumption. Putting the referee on the DSP was tried with Qwen3-4B w4a16 - a *larger*
+     * model than Gemma-4-E2B, on faster silicon - and lost on both counts that matter:
+     *
+     * | | Gemma-4-E2B (GPU) | Qwen3-4B (NPU) |
+     * |---|---|---|
+     * | engine load | **4.6 s** | **307 s** |
+     * | referee inference | 7.9 s | **2.9 s** |
+     * | spans hidden on the Aadhaar card | **20** | 16 |
+     *
+     * Inference really is 2.7x faster. But the bundle is 3.2 GB of context binaries mmap'd from
+     * FUSE-backed external storage, and a five-minute first-load stall is not shippable at any
+     * quality. It was also *worse*: the holder's name came back visible, and the document-type
+     * summary degraded. The workhorse is a different story - its bundle is 753 MB, it loads in
+     * ~3 s, and it is 46x faster per pass, which is why that one is NPU-first.
+     *
+     * The path stays wired because the measurement may change: moving the bundle to internal
+     * storage (which is what Tokito does) should remove most of the load cost, and a referee
+     * prompt built for a hide-list rather than adapted to one may close the quality gap.
+     */
+    private fun acquireReferee(refereeFile: java.io.File): LlmRuntime {
+        if (refereeFile.isFile) {
+            try {
+                return runtimeFactory(ModelCatalog.GEMMA, refereeFile).also { it.load() }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Gemma referee unavailable, trying Hexagon: ${t.message}")
+            }
+        }
+        val bundle = GenieNpuRuntime.locate(context, GenieNpuRuntime.REFEREE_DIR)
+            ?: throw Unavailable("no referee weights")
+        return GenieNpuRuntime(context, bundle, "Qwen3-4B-w4a16 (Genie)").also {
+            it.load()
+            Log.i(TAG, "referee on Hexagon: ${it.displayName} (${it.backendLabel})")
+        }
     }
 
     private fun report(
@@ -283,20 +322,27 @@ class GpuLlmCascadeStage(
             val neighbours = batchSpans.associate {
                 it.id to Prompts.neighbourContext(allSpans, it)
             }
+            // Same protocol split as the workhorse: the NPU referee gets a hide-list, the GPU
+            // referee gets constrained JSON with reasons.
+            val json = runtime.supportsJsonSchema
             val batch = Prompts.refereeBatch(batchSpans, neighbours, hints, docSummary)
             val reply = runCatching {
                 runtime.generate(
-                    system = Prompts.REFEREE_SYSTEM,
+                    system = if (json) Prompts.REFEREE_SYSTEM else Prompts.REFEREE_SYSTEM_HIDELIST,
                     prompt = batch.prompt,
-                    schema = Prompts.refereeSchema(batchSpans.size),
-                    maxOutputTokens = ModelCatalog.GEMMA.maxOutputTokens,
+                    schema = if (json) Prompts.refereeSchema(batchSpans.size) else null,
+                    maxOutputTokens = if (json) ModelCatalog.GEMMA.maxOutputTokens else 64,
                 )
             }.getOrElse {
                 Log.w(TAG, "referee batch ${index + 1} failed: ${it.message}")
                 return@forEachIndexed
             }
 
-            val local = DecisionParser.parse(reply, batch.localIds, DecisionSource.REFEREE)
+            val local = if (json) {
+                DecisionParser.parse(reply, batch.localIds, DecisionSource.REFEREE)
+            } else {
+                HideListParser.parse(reply, batch.localIds, DecisionSource.REFEREE)
+            }
             for ((localId, decision) in local) {
                 val globalId = batch.localToGlobal[localId] ?: continue
                 out[globalId] = decision.copy(id = globalId)

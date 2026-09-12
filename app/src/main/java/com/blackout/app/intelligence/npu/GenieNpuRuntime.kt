@@ -52,11 +52,10 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 class GenieNpuRuntime(
     private val context: Context,
     private val bundle: File,
+    override val displayName: String,
 ) : LlmRuntime {
 
     private var wrapper: LlmWrapper? = null
-
-    override val displayName: String = "Qwen3-0.6B-w4a16 (Genie)"
 
     override var backendLabel: String = "unloaded"
         private set
@@ -205,11 +204,24 @@ class GenieNpuRuntime(
         private const val WARM_UP_PROMPT =
             "<|im_start|>user\nSay ok.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n"
 
+        /** Side-loaded workhorse bundle (Qwen3-0.6B w4a16). */
+        const val WORKHORSE_DIR = GenieNpuProbe.BUNDLE_DIR
+
+        /**
+         * Side-loaded referee bundle (Qwen3-4B w4a16).
+         *
+         * Bigger than Gemma-4-E2B, and on Hexagon rather than the GPU - so the arbiter gets
+         * better *and* faster at once. Falls back to Gemma when this isn't pushed.
+         */
+        const val REFEREE_DIR =
+            "npu/qwen3_4b-geniex_qairt-w4a16-qualcomm_snapdragon_8_elite_gen5"
+
         /** The side-loaded bundle, or null when it hasn't been pushed. */
-        fun locate(context: Context): File? {
+        fun locate(context: Context, dirName: String = WORKHORSE_DIR): File? {
             val root = context.getExternalFilesDir(null) ?: return null
-            // Create it ourselves so side-loading pushes into an app-owned directory.
-            val dir = File(root, GenieNpuProbe.BUNDLE_DIR)
+            // Create it ourselves so side-loading pushes into an app-owned directory: anything
+            // adb makes is owned by `shell` and the app cannot traverse it.
+            val dir = File(root, dirName)
             dir.mkdirs()
             return dir.takeIf { File(it, "genie_config.json").isFile }
         }

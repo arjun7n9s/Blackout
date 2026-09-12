@@ -599,3 +599,36 @@ headline — "This page looks tilted" rather than the C-005 "Almost no text was 
 
 This is a warning, not a fix. Deskew/OSD before OCR (C-006 / C-010 / C-016) remains the real
 answer; this stops the page leaving silently in the meantime.
+
+---
+
+## Referee on the NPU: tried, measured, rejected
+
+The workhorse moving to Hexagon was a clear win (46x per pass), so the obvious next step was to
+put the referee there too - "dual Hexagon", with a model that is *larger* than Gemma-4-E2B.
+Qualcomm publishes `qwen3_4b-geniex_qairt-w4a16-qualcomm_snapdragon_8_elite_gen5` for this exact
+SoC, so it was a side-load away.
+
+It works. `referee on Hexagon: Qwen3-4B-w4a16 (Genie) (NPU)`, `backend=NPU`, both stages on the
+DSP and no GPU involved at all. It is also not what we ship:
+
+| | Gemma-4-E2B (GPU) | Qwen3-4B (NPU) |
+|---|---|---|
+| engine load | **4.6 s** | **307 s** |
+| referee inference | 7.9 s | **2.9 s** |
+| spans hidden, Aadhaar card | **20** | 16 |
+| document-type summary | `Aadhaar card details` | garbled |
+| holder's name | hidden | **visible** |
+
+Inference is genuinely 2.7x faster. But the bundle is 3.2 GB of context binaries memory-mapped
+from FUSE-backed external storage, and a five-minute first-load stall is unshippable at any
+quality - and the quality was worse anyway.
+
+The contrast with the workhorse is the useful part: that bundle is 753 MB, loads in ~3 s, and is
+46x faster per pass. **Bundle size, not silicon, is what decides whether a model belongs on the
+DSP here.**
+
+`acquireReferee` still prefers Gemma and keeps the Hexagon path as a fallback, because two things
+could flip the result: staging the bundle in internal storage rather than on FUSE (which is what
+the Tokito runtime does) should remove most of the load cost, and a referee prompt written for a
+hide-list rather than adapted to one may close the quality gap.
