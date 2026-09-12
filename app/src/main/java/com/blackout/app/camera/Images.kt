@@ -39,6 +39,31 @@ fun decodeSampledBitmap(context: Context, uri: Uri): Bitmap? = runCatching {
     }
 }.getOrNull()
 
+/**
+ * Same decode, straight off the filesystem.
+ *
+ * A `file://` [Uri] through [android.content.ContentResolver] is at the mercy of scoped storage
+ * and whichever app granted it; a [java.io.File] the app owns is not. Used by the debug fixture
+ * hook so a scripted run reads exactly the bytes that were pushed.
+ */
+fun decodeSampledBitmap(file: java.io.File): Bitmap? = runCatching {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
+            decoder.setTargetSampleSize(sampleSizeFor(info.size.width, info.size.height))
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    } else {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        BitmapFactory.decodeFile(
+            file.absolutePath,
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
+            },
+        )
+    }
+}.getOrNull()
+
 /** Nearest power-of-two subsample that brings the long edge under [MAX_DIMENSION]. */
 private fun sampleSizeFor(width: Int, height: Int): Int {
     var sample = 1

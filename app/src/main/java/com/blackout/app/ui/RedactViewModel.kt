@@ -13,6 +13,7 @@ import com.blackout.app.intelligence.MergePolicy
 import com.blackout.app.intelligence.ModelCatalog
 import com.blackout.app.intelligence.NpuGate
 import com.blackout.app.intelligence.SpanDecision
+import com.blackout.app.ocr.Deskew
 import com.blackout.app.ocr.MlKitOcrEngine
 import com.blackout.app.ocr.OcrResult
 import com.blackout.app.ocr.SkewMetrics
@@ -42,6 +43,8 @@ data class RedactUiState(
     val ocrMs: Long = 0,
     val error: String? = null,
     val showDebug: Boolean = false,
+    /** Degrees of deskew applied to the working image, 0 when the page was already upright. */
+    val deskewDeg: Float = 0f,
 ) {
     val degraded: Boolean get() = analysis.degraded
     val hideCount: Int get() = decisions.values.count { it.action == Action.HIDE }
@@ -101,8 +104,26 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
         )
 
         viewModelScope.launch {
-            val result: OcrResult = runCatching { ocr.recognize(bitmap) }
+            val firstPass: OcrResult = runCatching { ocr.recognize(bitmap) }
                 .getOrElse { OcrResult.empty(bitmap.width, bitmap.height) }
+
+            // Straighten a tilted page before anything judges it. Tilt costs us detections, not
+            // just tidy bars, so this runs ahead of the pipeline rather than as a cosmetic step.
+            // Declines itself when the second read comes back worse.
+            val straightened = Deskew.straighten(bitmap, firstPass, ocr)
+            val result = straightened.ocr
+            if (straightened.appliedDeg != 0f) {
+                // The rotated bitmap is now the working image: span rects are in its coordinates,
+                // so the overlay, the uncensor gesture and the export must all use it.
+                original = straightened.bitmap
+                _state.update {
+                    it.copy(
+                        imageWidth = straightened.bitmap.width,
+                        imageHeight = straightened.bitmap.height,
+                        deskewDeg = straightened.appliedDeg,
+                    )
+                }
+            }
 
             if (result.spans.isEmpty()) {
                 _state.update {
@@ -183,6 +204,7 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
         Log.i(
             STATS_TAG,
             "spans=${spans.size} ocr_ms=${_state.value.ocrMs} " +
+                "deskew=${"%.1f".format(_state.value.deskewDeg)} " +
                 // Stage ownership, so a soak run can see the CPU/GPU split without the debug panel.
                 "cpu_det=${analysis.deterministic.size} llm_spans=$llmSpans " +
                 "median_h=${analysis.medianSpanHeight} " +

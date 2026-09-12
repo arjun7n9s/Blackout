@@ -40,6 +40,78 @@ object SkewMetrics {
     }
 
     /**
+     * How far the page as a whole is rotated, in degrees, range [-180, 180).
+     *
+     * [medianAbsAngle] answers "how tilted is this?"; this answers "which way, and by how much",
+     * which is what [Deskew] needs to rotate the page back.
+     *
+     * ## Why it is two steps
+     *
+     * A plain median over raw angles breaks at the wrap point: a page near 180° reports lines as
+     * +179 and -179, whose median is 0. A circular mean fixes the wrap but loses the robustness -
+     * one vertical stamp would drag the whole page off true.
+     *
+     * So: take the robust median on the modulo-180 fold, which cannot wrap because the cluster is
+     * never near both ends at once, then decide the remaining 180° ambiguity by majority vote of
+     * the raw angles. That distinguishes a page rotated +90 from one rotated -90 - identical after
+     * folding, opposite in what they need - and spots a page that is simply upside down.
+     *
+     * The vote must be [ORIENTATION_MAJORITY] decisive. Rotating an upright page by 180° is the
+     * one mistake here that OCR would not notice, so an unclear page keeps the fold's answer and
+     * gets tilt corrected only.
+     */
+    fun medianSignedAngle(spans: List<TextSpan>): Float {
+        if (spans.isEmpty()) return 0f
+        val folded = spans.map { signedDeviation(it.angleDeg) }.sorted()
+            .let { it[it.size / 2] }
+        val flipped = normalize(folded + 180f)
+
+        val usable = spans.filter { it.angleDeg.isFinite() }
+        if (usable.isEmpty()) return folded
+        val forFlipped = usable.count { span ->
+            val raw = normalize(span.angleDeg)
+            circularDistance(raw, flipped) < circularDistance(raw, folded)
+        }
+        val share = forFlipped.toFloat() / usable.size
+        return when {
+            share >= ORIENTATION_MAJORITY -> flipped
+            share <= 1f - ORIENTATION_MAJORITY -> folded
+            // Genuinely mixed: correct the tilt, leave the orientation alone.
+            else -> folded
+        }
+    }
+
+    /**
+     * How lopsided the orientation vote must be before the page is turned the other way up.
+     *
+     * Deliberately high. Getting the tilt wrong produces a visibly crooked page that the OCR
+     * acceptance check then rejects; getting the orientation wrong produces a perfectly sharp,
+     * perfectly upside-down document that reads exactly as well and so passes every check we have.
+     */
+    const val ORIENTATION_MAJORITY = 0.7f
+
+    /** Folds onto (-90, 90]: 0 is horizontal, +ve leans one way, -ve the other. */
+    fun signedDeviation(angleDeg: Float): Float {
+        if (!angleDeg.isFinite()) return 0f
+        var a = angleDeg % 180f
+        if (a <= -90f) a += 180f
+        if (a > 90f) a -= 180f
+        return a
+    }
+
+    /** Folds onto [-180, 180). */
+    fun normalize(angleDeg: Float): Float {
+        if (!angleDeg.isFinite()) return 0f
+        var a = angleDeg % 360f
+        if (a < -180f) a += 360f
+        if (a >= 180f) a -= 360f
+        return a
+    }
+
+    /** Shortest angular distance between two directions, 0..180. */
+    fun circularDistance(a: Float, b: Float): Float = abs(normalize(a - b))
+
+    /**
      * Folds an arbitrary angle onto 0..90, where 0 is horizontal and 90 is vertical.
      *
      * Deliberately folds modulo 180, not 360: text rotated a full 180° still runs along

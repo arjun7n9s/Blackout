@@ -43,6 +43,7 @@ import com.blackout.app.ui.RedactScreen
 import com.blackout.app.ui.RedactViewModel
 import com.blackout.app.ui.rememberCameraPermissionState
 import com.blackout.app.ui.theme.BlackoutTheme
+import java.io.File
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -70,13 +71,49 @@ class MainActivity : ComponentActivity() {
         }
 
         val shared = incomingImage(intent)
+        val fixture = debugFixture(intent)
         setContent {
             BlackoutTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
-                    BlackoutApp(sharedImage = shared)
+                    BlackoutApp(sharedImage = shared, fixture = fixture)
                 }
             }
         }
+    }
+
+    /**
+     * Debug-only: run a pushed image straight through the pipeline, no picker, no URI grant.
+     *
+     *   adb push tools/testdoc-skew30.png \
+     *     /sdcard/Android/data/com.blackout.app/files/fixtures/
+     *   adb shell am start -n com.blackout.app/.MainActivity --es fixture testdoc-skew30.png
+     *
+     * Handing a fixture in as a `file://` VIEW intent is unreliable - scoped storage decides
+     * whether the decode sees the bytes, and a silent null looks exactly like a clean page. This
+     * reads a file the app owns, so a scripted bank run is reproducible and a missing fixture says
+     * so in logcat instead of quietly doing nothing.
+     */
+    private fun debugFixture(intent: Intent?): Bitmap? {
+        if (!BuildConfig.DEBUG) return null
+        val name = intent?.getStringExtra("fixture") ?: return null
+        val dir = File(getExternalFilesDir(null), FIXTURE_DIR)
+        // The app has to make this directory itself. One created by `adb shell mkdir`, or
+        // implicitly by `adb push <dir>`, belongs to `shell` and the app cannot traverse it - the
+        // fixtures list fine over adb and read as absent from in here. Same trap as the NPU
+        // bundle; see GenieNpuRuntime.
+        dir.mkdirs()
+        val file = File(dir, name)
+        if (!file.isFile) {
+            android.util.Log.w(FIXTURE_TAG, "fixture not found: ${file.absolutePath}")
+            return null
+        }
+        val bitmap = decodeSampledBitmap(file)
+        android.util.Log.i(
+            FIXTURE_TAG,
+            if (bitmap == null) "fixture failed to decode: $name"
+            else "fixture $name -> ${bitmap.width}x${bitmap.height}",
+        )
+        return bitmap
     }
 
     /** An image handed to us by another app via ACTION_SEND or ACTION_VIEW. */
@@ -90,6 +127,11 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_VIEW -> intent.data
             else -> null
         }
+    }
+
+    private companion object {
+        const val FIXTURE_DIR = "fixtures"
+        const val FIXTURE_TAG = "BlackoutFixture"
     }
 }
 
@@ -108,7 +150,7 @@ private sealed interface Screen {
 }
 
 @Composable
-private fun BlackoutApp(sharedImage: Uri? = null) {
+private fun BlackoutApp(sharedImage: Uri? = null, fixture: Bitmap? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbars = remember { SnackbarHostState() }
@@ -133,6 +175,13 @@ private fun BlackoutApp(sharedImage: Uri? = null) {
             redactViewModel.start(bitmap)
             screen = Screen.Redact
         }
+    }
+
+    // Debug fixture: skip straight to redaction, same entry point a shared image uses.
+    LaunchedEffect(fixture) {
+        val bitmap = fixture ?: return@LaunchedEffect
+        redactViewModel.start(bitmap)
+        screen = Screen.Redact
     }
 
     // If the user tapped "Take photo" before granting, open the camera as soon as they allow it.

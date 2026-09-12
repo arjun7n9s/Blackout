@@ -274,6 +274,9 @@ private fun DebugPanel(
     ) {
         Column(Modifier.padding(12.dp)) {
             DebugLine("spans", "${state.spans.size}   ocr ${state.ocrMs}ms")
+            if (state.deskewDeg != 0f) {
+                DebugLine("deskew", "straightened ${"%.1f".format(state.deskewDeg)}°")
+            }
             DebugLine("hybrid", state.analysis.backendReport.hudLine())
             DebugLine("verdict", "hide ${state.hideCount} · keep ${state.keepCount} · unsure ${state.unsureCount}")
             DebugLine("overrides", "${state.overrides.size} tap(s)")
