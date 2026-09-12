@@ -2,166 +2,173 @@ package com.blackout.app.intelligence
 
 import android.content.Context
 import android.util.Log
-import com.blackout.app.ocr.FieldLayout
-import com.blackout.app.ocr.SpanRole
 import com.blackout.app.ocr.TextSpan
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-
-/** Coarse progress for the UI while the cascade runs. */
-sealed interface AnalysisStage {
-    data object Hints : AnalysisStage
-    data class LoadingModel(val name: String) : AnalysisStage
-    data class Workhorse(val batch: Int, val batches: Int) : AnalysisStage
-    data object Summarising : AnalysisStage
-    data class Referee(val batch: Int, val batches: Int) : AnalysisStage
-    data object Done : AnalysisStage
-}
+import java.io.File
 
 /**
- * Runs the cascade: regex hints -> Qwen3 over every span -> Gemma over the contested ones.
+ * The GPU's share of the hybrid pipeline: the Qwen3-0.6B → Gemma-4-E2B cascade, run **only over
+ * the spans the CPU stage could not settle**.
  *
- * Everything is on-device. There is no network call anywhere on this path, by construction -
- * the app holds no INTERNET permission at all (see AndroidManifest), so a cloud call is not
- * merely absent but impossible.
+ * Nothing here decides what a span means on its own any more. It receives leftovers - prose, table
+ * cells, unpaired values - and it is bounded twice:
  *
- * Failure is always graceful. Missing weights, a backend that won't load, or a model that
- * returns nothing all degrade to the regex-only path, flagged [AnalysisResult.degraded] so the
- * UI can label it rather than quietly pretending the models ran.
+ *  - [RefereeBudget] can switch the referee off entirely for a page shape where Phone C measured
+ *    it doing harm (`C-008`, `C-015`).
+ *  - [MergePolicy.REFEREE_QUEUE_CAP] bounds the queue when it does run.
+ *
+ * "GPU" is the *intent*. What actually ran is [LlmRuntime.backendLabel], set only after a warm-up
+ * generation returned, and that is what lands in the [StageReport] - so a device without OpenCL
+ * reports `CPU·qwen`, which is exactly what Phone C's loaner should show.
  */
-class RedactionAnalyzer(
+class GpuLlmCascadeStage(
     private val context: Context,
-    private val catalog: ModelCatalog = ModelCatalog(context),
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val runtimeFactory: (ModelSpec, java.io.File) -> LlmRuntime = { spec, file ->
+    private val catalog: ModelCatalog,
+    private val runtimeFactory: (ModelSpec, File) -> LlmRuntime = { spec, file ->
         LiteRtLlmRuntime(context, spec, file)
     },
 ) {
 
+    /** No weights, or no usable backend. The pipeline turns this into the degraded path. */
+    class Unavailable(message: String) : Exception(message)
+
+    data class Outcome(
+        val workhorse: Map<Int, SpanDecision>,
+        val referee: Map<Int, SpanDecision>,
+        val docSummary: String?,
+        val stats: List<InferenceStat>,
+        val reports: List<StageReport>,
+    )
+
     private var workhorseRuntime: LlmRuntime? = null
     private var refereeRuntime: LlmRuntime? = null
 
-    suspend fun analyze(
-        rawSpans: List<TextSpan>,
-        imageWidth: Int,
-        onStage: (AnalysisStage) -> Unit = {},
-    ): AnalysisResult = withContext(dispatcher) {
-        if (rawSpans.isEmpty()) return@withContext AnalysisResult.Empty
-
-        onStage(AnalysisStage.Hints)
-        val hints = buildHints(rawSpans)
-
-        // Geometric label/value roles. Hints are computed first because they are the safety
-        // interlock: a span carrying a strong pattern is never accepted as a label, so a name or
-        // email printed in the left column can't be made un-redactable by geometry.
-        val layout = FieldLayout.detect(rawSpans, imageWidth)
-        val spans = FieldLayout.applyTo(rawSpans, layout) { span ->
-            hints[span.id].orEmpty().any { it.strength == HintStrength.STRONG }
-        }
-        if (layout.labelColumnX != null) {
-            Log.i(
-                TAG,
-                "label column at x=${layout.labelColumnX}, " +
-                    "${spans.count { it.role == SpanRole.LABEL }} labels / " +
-                    "${spans.count { it.role == SpanRole.VALUE }} values",
-            )
-        }
-
+    /**
+     * @param queue spans still undecided after the CPU (and, one day, NPU) stages.
+     * @param allSpans every span on the page - used for neighbour context only, never re-judged.
+     * @param refereeSkipReason non-null when [RefereeBudget] vetoed the referee for this page.
+     */
+    fun run(
+        queue: List<TextSpan>,
+        allSpans: List<TextSpan>,
+        hints: Map<Int, List<CandidateHint>>,
+        refereeSkipReason: String?,
+        onStage: (AnalysisStage) -> Unit,
+    ): Outcome {
         val workhorseFile = catalog.locate(ModelCatalog.QWEN)
-            ?: return@withContext degraded(
-                spans,
-                hints,
-                "workhorse weights not found in ${catalog.modelsDir().name}/",
-            )
+            ?: throw Unavailable("workhorse weights not found in ${catalog.modelsDir().name}/")
 
         val workhorse = try {
             onStage(AnalysisStage.LoadingModel(ModelCatalog.QWEN.displayName))
-            (workhorseRuntime ?: runtimeFactory(ModelCatalog.QWEN, workhorseFile).also {
+            workhorseRuntime ?: runtimeFactory(ModelCatalog.QWEN, workhorseFile).also {
                 it.load(); workhorseRuntime = it
-            })
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "workhorse load failed", t)
-            return@withContext degraded(
-                spans,
-                hints,
-                "could not load ${ModelCatalog.QWEN.displayName}",
-            )
+            throw Unavailable("could not load ${ModelCatalog.QWEN.displayName}")
         }
 
         val stats = mutableListOf<InferenceStat>()
+        val reports = mutableListOf<StageReport>()
         val lowConfidence = mutableSetOf<Int>()
-        val workhorseDecisions = runWorkhorse(workhorse, spans, stats, lowConfidence, onStage)
+        val workhorseDecisions = runWorkhorse(workhorse, queue, allSpans, stats, lowConfidence, onStage)
 
         if (workhorseDecisions.isEmpty()) {
-            return@withContext degraded(
-                spans,
-                hints,
-                "${ModelCatalog.QWEN.displayName} returned nothing",
+            throw Unavailable("${ModelCatalog.QWEN.displayName} returned nothing")
+        }
+        reports += report(StageReport.WORKHORSE, workhorse, stats, queue.size)
+
+        val queueIds = if (refereeSkipReason != null) {
+            emptyList()
+        } else {
+            MergePolicy.refereeQueue(queue, workhorseDecisions, hints, lowConfidence)
+        }
+
+        var refereeDecisions = emptyMap<Int, SpanDecision>()
+        var docSummary: String? = null
+        val refereeFile = catalog.locate(ModelCatalog.GEMMA)
+
+        if (queueIds.isEmpty() || refereeFile == null) {
+            val note = refereeSkipReason
+                ?: if (refereeFile == null) "referee weights not present" else "nothing contested"
+            Log.i(TAG, "referee not run: $note")
+            reports += StageReport(
+                silicon = Silicon.GPU,
+                task = StageReport.REFEREE,
+                status = StageStatus.SKIPPED,
+                spanCount = 0,
+                elapsedMs = 0,
+                note = note,
+            )
+            return Outcome(workhorseDecisions, emptyMap(), null, stats, reports)
+        }
+
+        try {
+            onStage(AnalysisStage.LoadingModel(ModelCatalog.GEMMA.displayName))
+            val referee = refereeRuntime ?: runtimeFactory(ModelCatalog.GEMMA, refereeFile)
+                .also { it.load(); refereeRuntime = it }
+
+            onStage(AnalysisStage.Summarising)
+            docSummary = runSummary(referee, allSpans, stats)
+
+            val ids = queueIds.toSet()
+            val contested = queue.filter { it.id in ids }
+            refereeDecisions = runReferee(referee, contested, allSpans, hints, docSummary, stats, onStage)
+            reports += report(StageReport.REFEREE, referee, stats, contested.size)
+        } catch (t: Throwable) {
+            // A referee failure is not fatal - workhorse decisions still stand.
+            Log.w(TAG, "referee pass failed: ${t.message}")
+            reports += StageReport(
+                silicon = Silicon.GPU,
+                task = StageReport.REFEREE,
+                status = StageStatus.FAILED,
+                spanCount = 0,
+                elapsedMs = 0,
+                note = t.message,
             )
         }
 
-        // Referee pass, only over contested spans.
-        val queueIds = MergePolicy.refereeQueue(spans, workhorseDecisions, hints, lowConfidence)
-        var refereeDecisions = emptyMap<Int, SpanDecision>()
-        var docSummary: String? = null
+        return Outcome(workhorseDecisions, refereeDecisions, docSummary, stats, reports)
+    }
 
-        val refereeFile = catalog.locate(ModelCatalog.GEMMA)
-        if (queueIds.isNotEmpty() && refereeFile != null) {
-            try {
-                onStage(AnalysisStage.LoadingModel(ModelCatalog.GEMMA.displayName))
-                val referee = refereeRuntime ?: runtimeFactory(ModelCatalog.GEMMA, refereeFile)
-                    .also { it.load(); refereeRuntime = it }
-
-                onStage(AnalysisStage.Summarising)
-                docSummary = runSummary(referee, spans, stats)
-
-                val queue = spans.filter { it.id in queueIds.toSet() }
-                refereeDecisions = runReferee(referee, queue, spans, hints, docSummary, stats, onStage)
-            } catch (t: Throwable) {
-                // A referee failure is not fatal - workhorse decisions still stand.
-                Log.w(TAG, "referee pass failed: ${t.message}")
-            }
-        }
-
-        onStage(AnalysisStage.Done)
-        AnalysisResult(
-            workhorse = workhorseDecisions,
-            referee = refereeDecisions,
-            hints = hints,
-            stats = stats,
-            docSummary = docSummary,
-            degraded = false,
-            spans = spans,
+    private fun report(
+        task: String,
+        runtime: LlmRuntime,
+        stats: List<InferenceStat>,
+        spanCount: Int,
+    ): StageReport {
+        val label = if (task == StageReport.WORKHORSE) "workhorse" else "referee"
+        val elapsed = stats.filter { it.label == label || (task == StageReport.REFEREE && it.label == "doc-summary") }
+            .sumOf { it.elapsedMs }
+        return StageReport(
+            silicon = siliconOf(runtime.backendLabel),
+            task = task,
+            status = StageStatus.OK,
+            spanCount = spanCount,
+            elapsedMs = elapsed,
+            note = runtime.backendLabel,
         )
     }
 
-    private fun buildHints(spans: List<TextSpan>): Map<Int, List<CandidateHint>> =
-        spans.withIndex().associate { (index, span) ->
-            val raw = CandidateHints.detect(span.text)
-            val previous = spans.getOrNull(index - 1)?.text
-            span.id to CandidateHints.promoteByNeighbour(raw, previous)
-        }.filterValues { it.isNotEmpty() }
-
     private fun runWorkhorse(
         runtime: LlmRuntime,
-        spans: List<TextSpan>,
+        queue: List<TextSpan>,
+        allSpans: List<TextSpan>,
         stats: MutableList<InferenceStat>,
         lowConfidence: MutableSet<Int>,
         onStage: (AnalysisStage) -> Unit,
     ): Map<Int, SpanDecision> {
-        val batches = spans.chunked(Prompts.WORKHORSE_BATCH)
+        val batches = queue.chunked(Prompts.WORKHORSE_BATCH)
         val out = LinkedHashMap<Int, SpanDecision>()
         val started = System.currentTimeMillis()
 
         batches.forEachIndexed { index, batchSpans ->
             onStage(AnalysisStage.Workhorse(index + 1, batches.size))
-            val firstIdx = spans.indexOfFirst { it.id == batchSpans.first().id }
-            val lastIdx = spans.indexOfFirst { it.id == batchSpans.last().id }
+            val firstIdx = allSpans.indexOfFirst { it.id == batchSpans.first().id }
+            val lastIdx = allSpans.indexOfFirst { it.id == batchSpans.last().id }
             val batch = Prompts.workhorseBatch(
                 spans = batchSpans,
-                above = spans.getOrNull(firstIdx - 1)?.text,
-                below = spans.getOrNull(lastIdx + 1)?.text,
+                above = allSpans.getOrNull(firstIdx - 1)?.text,
+                below = allSpans.getOrNull(lastIdx + 1)?.text,
             )
             val reply = runCatching {
                 runtime.generate(
@@ -193,7 +200,7 @@ class RedactionAnalyzer(
             label = "workhorse",
             model = runtime.displayName,
             backend = runtime.backendLabel,
-            spanCount = spans.size,
+            spanCount = queue.size,
             batchCount = batches.size,
             elapsedMs = System.currentTimeMillis() - started,
         )
@@ -275,20 +282,6 @@ class RedactionAnalyzer(
         return out
     }
 
-    private fun degraded(
-        spans: List<TextSpan>,
-        hints: Map<Int, List<CandidateHint>>,
-        reason: String,
-    ): AnalysisResult {
-        Log.w(TAG, "degraded: $reason")
-        return AnalysisResult(
-            hints = hints,
-            degraded = true,
-            degradedReason = reason,
-            spans = spans,
-        )
-    }
-
     /** Frees both engines. Gemma alone holds ~2.5 GB, so this matters. */
     fun release() {
         runCatching { workhorseRuntime?.close() }
@@ -299,5 +292,11 @@ class RedactionAnalyzer(
 
     private companion object {
         const val TAG = "BlackoutAnalyzer"
+
+        fun siliconOf(backendLabel: String): Silicon = when (backendLabel.uppercase()) {
+            "NPU" -> Silicon.NPU
+            "GPU" -> Silicon.GPU
+            else -> Silicon.CPU
+        }
     }
 }

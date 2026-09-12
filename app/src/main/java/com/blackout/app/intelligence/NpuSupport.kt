@@ -120,4 +120,81 @@ object NpuSupport {
         val reason = skipReason(context, npuFile) ?: return
         Log.i(TAG, "NPU skipped for ${spec.displayName}: $reason")
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Vendor Hexagon probe
+    // ---------------------------------------------------------------------------------------
+
+    private val VENDOR_LIB_DIRS = listOf("/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64")
+
+    private val HTP_STUB = Regex("""libQnnHtpV(\d+)Stub\.so""")
+
+    /**
+     * The Hexagon generation this handset actually exposes, e.g. `V81`, or null if no vendor QNN
+     * stub is readable.
+     *
+     * Read rather than hard-coded on purpose. The hybrid brief says "V79"; the iQOO 15 measurably
+     * ships `libQnnHtpV81Stub.so` / `libQnnHtpV81Skel.so`, and LiteRT's own `supported_soc.csv`
+     * maps `Qualcomm,SM8850,v81`. Pinning a generation would make the gate wrong on the one device
+     * we have, so we ask the device.
+     */
+    fun hexagonGeneration(): String? {
+        for (dir in VENDOR_LIB_DIRS) {
+            val names = File(dir).list() ?: continue
+            for (name in names) {
+                val match = HTP_STUB.matchEntire(name) ?: continue
+                // The matching skel lives on the DSP side (/vendor/lib/rfsa/adsp), which app
+                // processes cannot list, so the stub is the readable half of the pair.
+                return "V${match.groupValues[1]}"
+            }
+        }
+        return null
+    }
+
+    fun vendorHtpPresent(): Boolean =
+        VENDOR_LIB_DIRS.any { File(it, "libQnnHtp.so").isFile }
+
+    // ---------------------------------------------------------------------------------------
+    // Crash marker
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * A file written immediately before we construct `Backend.NPU`, deleted as soon as that
+     * attempt has either succeeded or thrown.
+     *
+     * A mismatched dispatch runtime does not throw - it calls `abort()`. The process dies inside
+     * `Engine.initialize()` with nothing catchable, so the only way to learn from it is to leave a
+     * note on disk first. If the note is still there next launch, the previous attempt took the
+     * process with it and we do not try again.
+     *
+     * The note records a fingerprint of the dispatch `.so`, so dropping in a *different* library
+     * (the whole point of the AI Hub / QNN follow-up) automatically re-arms the attempt instead of
+     * requiring the user to clear app data.
+     */
+    private fun marker(context: Context) = File(context.filesDir, "npu-init.marker")
+
+    private fun dispatchFingerprint(context: Context): String {
+        val lib = File(context.applicationInfo.nativeLibraryDir, DISPATCH_LIB)
+        if (!lib.isFile) return "absent"
+        return "${lib.length()}:${lib.lastModified()}"
+    }
+
+    /** True when the last NPU init attempt with *this* dispatch library killed the process. */
+    fun npuInitCrashed(context: Context): Boolean {
+        val marker = marker(context)
+        if (!marker.isFile) return false
+        val recorded = runCatching { marker.readText().trim() }.getOrNull()
+        if (recorded == dispatchFingerprint(context)) return true
+        // Different library than the one that crashed - allow one clean attempt.
+        runCatching { marker.delete() }
+        return false
+    }
+
+    fun beginNpuAttempt(context: Context) {
+        runCatching { marker(context).writeText(dispatchFingerprint(context)) }
+    }
+
+    fun endNpuAttempt(context: Context) {
+        runCatching { marker(context).delete() }
+    }
 }

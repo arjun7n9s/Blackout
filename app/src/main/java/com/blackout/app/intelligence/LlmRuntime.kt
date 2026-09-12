@@ -59,8 +59,13 @@ class LiteRtLlmRuntime(
         var lastError: Throwable? = null
         for (candidate in backendCandidates()) {
             var built: Engine? = null
+            val isNpu = candidate.label == "NPU"
             try {
                 val started = System.currentTimeMillis()
+                // A wrong dispatch runtime aborts the process from native code instead of
+                // throwing, so leave a note on disk first: if it is still there next launch, NPU
+                // is not attempted again (NpuGate).
+                if (isNpu) NpuSupport.beginNpuAttempt(context)
                 built = Engine(
                     EngineConfig(
                         modelPath = candidate.modelFile.absolutePath,
@@ -78,6 +83,7 @@ class LiteRtLlmRuntime(
                 // with "Can not find OpenCL library". Warm-up is the gate: HUD says NPU/GPU
                 // only if this one-token generate returned.
                 warmUp(built)
+                if (isNpu) NpuSupport.endNpuAttempt(context)
 
                 engine = built
                 backendLabel = candidate.label
@@ -89,6 +95,8 @@ class LiteRtLlmRuntime(
                 )
                 return
             } catch (t: Throwable) {
+                // It threw, so the process survived: this was not the abort case the marker is for.
+                if (isNpu) NpuSupport.endNpuAttempt(context)
                 Log.w(TAG, "${spec.displayName} unusable on ${candidate.label}: ${t.message}")
                 runCatching { built?.close() }
                 lastError = t
@@ -183,7 +191,13 @@ class LiteRtLlmRuntime(
         NpuSupport.logSkip(context, spec, npuWeights)
 
         val out = mutableListOf<BackendChoice>()
-        if (NpuSupport.willAttemptNpu(context, npuWeights)) {
+        if (NpuSupport.npuInitCrashed(context)) {
+            Log.w(
+                TAG,
+                "NPU skipped for ${spec.displayName}: a previous launch aborted inside NPU init " +
+                    "with this ${NpuSupport.DISPATCH_LIB}",
+            )
+        } else if (NpuSupport.willAttemptNpu(context, npuWeights)) {
             val npuFile = npuWeights ?: modelFile
             val how = if (npuWeights != null) "AOT" else "JIT"
             Log.i(TAG, "trying NPU ($how) for ${spec.displayName} with ${npuFile.name}")

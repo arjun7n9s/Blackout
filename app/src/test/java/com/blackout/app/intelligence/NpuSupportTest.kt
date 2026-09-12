@@ -53,4 +53,26 @@ class NpuSupportTest {
         assertFalse(NpuSupport.jitDepsPresent(dir))
         dir.deleteRecursively()
     }
+
+    /**
+     * The exact drop-in that lied on 2026-09-12: LiteRT 2.1.6's dispatch + compiler plugin with no
+     * QAIRT libraries beside them. `Engine.initialize()` and the warm-up generation both succeeded
+     * while every token came off XNNPACK, so "some files are here" must not open the gate.
+     */
+    @Test
+    fun `dispatch plus plugin without QAIRT is refused`() {
+        val dir = kotlin.io.path.createTempDirectory("npu-support").toFile()
+        File(dir, NpuSupport.DISPATCH_LIB).writeText("x")
+        File(dir, NpuSupport.COMPILER_PLUGIN_LIB).writeText("x")
+        assertTrue(NpuSupport.compilerPluginPresent(dir))
+        assertFalse("no libQnnIr.so / libQnnSaver.so / prepare", NpuSupport.jitDepsPresent(dir))
+
+        File(dir, "libQnnIr.so").writeText("x")
+        File(dir, "libQnnSaver.so").writeText("x")
+        assertFalse("still no ${NpuSupport.PREPARE_LIB}", NpuSupport.jitDepsPresent(dir))
+
+        File(dir, NpuSupport.PREPARE_LIB).writeText("x")
+        assertTrue(NpuSupport.jitDepsPresent(dir))
+        dir.deleteRecursively()
+    }
 }

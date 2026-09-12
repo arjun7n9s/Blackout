@@ -7,6 +7,8 @@ enum class HintKind(val label: String) {
     PAN("pan"),
     CARD("card"),
     ACCOUNT("account-no"),
+    IFSC("ifsc"),
+    UPI("upi-id"),
     PASSPORT("passport"),
     IP("ip"),
     DATE("date"),
@@ -56,6 +58,15 @@ object CandidateHints {
 
     private val ACCOUNT = Regex("""(?i)\b(?:a/?c|acct|account|ifsc|iban)\b[\s:.#\-]*([A-Z0-9]{6,24})""")
 
+    // RBI IFSC: 4-letter bank code, a reserved 0, 6-char branch code. Printed bare next to an
+    // "IFSC" caption, so the ACCOUNT pattern above (which needs the keyword in the same span)
+    // misses it - that is exactly the C-001 `HZBN0001429` leak.
+    private val IFSC = Regex("""(?<![A-Z0-9])[A-Z]{4}0[A-Z0-9]{6}(?![A-Z0-9])""")
+
+    // UPI VPA: handle@psp with NO dot in the PSP, which is what separates `arjun@ybl` from an
+    // email address. Emails are matched first and claim their own text.
+    private val UPI = Regex("""(?<![A-Za-z0-9._%+\-])[A-Za-z0-9][A-Za-z0-9._\-]{1,}@[A-Za-z]{2,}(?![A-Za-z0-9.\-])""")
+
     private val IP = Regex("""(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])""")
 
     private val DATE = Regex("""(?<![\d/\-.])(?:[0-3]?\d[/\-.][0-1]?\d[/\-.](?:\d{2}|\d{4})|(?:\d{4})[/\-.][0-1]?\d[/\-.][0-3]?\d)(?![\d/\-.])""")
@@ -71,6 +82,12 @@ object CandidateHints {
         val out = mutableListOf<CandidateHint>()
 
         EMAIL.findAll(text).forEach { out += CandidateHint(HintKind.EMAIL, it.value) }
+        UPI.findAll(text).forEach { m ->
+            if (out.none { it.kind == HintKind.EMAIL && it.matched.contains(m.value) }) {
+                out += CandidateHint(HintKind.UPI, m.value)
+            }
+        }
+        IFSC.findAll(text).forEach { out += CandidateHint(HintKind.IFSC, it.value) }
         URL.findAll(text).forEach { out += CandidateHint(HintKind.URL, it.value) }
         IP.findAll(text).forEach { out += CandidateHint(HintKind.IP, it.value) }
         PAN.findAll(text).forEach { out += CandidateHint(HintKind.PAN, it.value) }

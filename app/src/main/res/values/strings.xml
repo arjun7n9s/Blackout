@@ -31,6 +31,9 @@
     <string name="share_image">Share</string>
     <string name="share_chooser">Share redacted image</string>
     <string name="share_failed">Couldn\'t prepare the image.</string>
+    <string name="share_guard_title">Almost no text was read</string>
+    <string name="share_anyway">Share anyway</string>
+    <string name="share_guard_back">Go back</string>
     <string name="no_text_found">No text found in this image.</string>
     <string name="home_footer">OCR and both models run on this phone. Nothing is uploaded.</string>
 </resources>

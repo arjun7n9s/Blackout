@@ -12,11 +12,14 @@ import com.blackout.app.ocr.TextSpan
  * Resolution order, highest priority first:
  *  1. **User override.** An explicit tap always wins. Nothing overrules the person holding the phone.
  *  2. **Layout.** A span geometrically identified as a field label stays visible.
- *  3. **Referee** (Gemma) - contested spans only; labels are excluded from that queue.
- *  4. **Workhorse** (Qwen).
- *  5. **Hints**, but *only* when [degraded] is true (no model available). Otherwise hints are
+ *  3. **Deterministic** ([CpuDeterministicStage]) - a high-confidence identifier pattern, or the
+ *     value paired with a sensitive caption. Above both models because Phone C measured them
+ *     getting exactly these spans wrong on every two-column form, in both directions.
+ *  4. **Referee** (Gemma) - contested spans only; labels are excluded from that queue.
+ *  5. **Workhorse** (Qwen).
+ *  6. **Hints**, but *only* when [degraded] is true (no model available). Otherwise hints are
  *     context for the prompt, never a decision, per the architecture rules.
- *  6. **Default -> KEEP.**
+ *  7. **Default -> KEEP.**
  *
  * The central safety choice: **UNSURE is not HIDE.** An unresolved span stays visible, because a
  * false positive silently destroys information the user wanted, while a false negative is visible
@@ -28,6 +31,7 @@ object MergePolicy {
         spans: List<TextSpan>,
         workhorse: Map<Int, SpanDecision> = emptyMap(),
         referee: Map<Int, SpanDecision> = emptyMap(),
+        deterministic: Map<Int, SpanDecision> = emptyMap(),
         hints: Map<Int, List<CandidateHint>> = emptyMap(),
         userOverrides: Map<Int, Action> = emptyMap(),
         degraded: Boolean = false,
@@ -57,6 +61,15 @@ object MergePolicy {
             // tap from hidden, and the user can see it to make that call.
             if (span.role == SpanRole.LABEL) {
                 out[id] = SpanDecision(id, Action.KEEP, DecisionSource.LAYOUT, "field label")
+                continue
+            }
+
+            // Settled on the CPU without a model. These spans were never enqueued for Qwen or
+            // Gemma, so in practice there is nothing to conflict with - but when a stale model
+            // answer does exist (e.g. a re-merge after a tap), the deterministic verdict wins.
+            val settled = deterministic[id]
+            if (settled != null && settled.action != Action.UNSURE) {
+                out[id] = settled
                 continue
             }
 

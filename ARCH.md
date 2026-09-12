@@ -6,6 +6,10 @@ How a photo becomes a redacted image, entirely on the phone.
 
 ## Pipeline
 
+`HybridRedactPipeline` runs five stages, and **each one is owned by a different piece of
+silicon**. Which silicon actually ran a stage is measured, reported per image, and printed in the
+HUD — see [Hybrid silicon ownership](#hybrid-silicon-ownership).
+
 ```
 Camera / gallery / shared-in image
         │
@@ -13,31 +17,34 @@ Camera / gallery / shared-in image
   Bitmap (in memory, never written to disk)
         │
         ▼
-  ocr/          ML Kit text recognition        → List<TextSpan>{id, text, SpanRect, confidence}
+A ocr/          ML Kit text recognition        → List<TextSpan>{id, text, SpanRect, confidence}
         │       ReadingOrder.sort()              row-band, then left-to-right; renumber ids
+        │       CandidateHints                   regex signals (WEAK / STRONG)
+        │       FieldLayout                      LABEL / VALUE / STANDALONE, strong-hint veto
         ▼
-  intelligence/ CandidateHints                 → regex signals (WEAK / STRONG)
-        │
+B CpuDeterministicStage                  CPU   → settles what no model can beat:
+        │   · STRONG identifier (PAN/Aadhaar/IFSC/UPI/email/phone/card/acct) → HIDE
+        │   · VALUE paired with a sensitive caption                          → HIDE
+        │   · field label / letterhead                                       → KEEP
+        │   These spans are removed from the model queue entirely.
         ▼
-  ocr/          FieldLayout                    → LABEL / VALUE / STANDALONE
-        │       two-column geometry + caption lexicon; strong-hint veto
-        │
-        ├─ Qwen3-0.6B  (workhorse)  every span, batches of 10, constrained JSON
-        │       │
-        │       └─ refereeQueue: unsure ∪ (keep + STRONG hint) ∪ (hide + no hint)
-        │                        ∪ missing ∪ mode-collapsed batches
-        │                        — labels excluded (layout has already settled them)
-        │
-        └─ Gemma-4-E2B (referee)    only the contested *values* + a doc-type summary
-        │
+C NpuClassifyStage                       NPU   → SKIPPED (no QNN dispatch / no NPU model)
+        │                                        gate: dispatch + vendor HTP + QAIRT + no crash marker
         ▼
-  MergePolicy.merge()                          → Map<spanId, SpanDecision>
-        │   user tap > layout KEEP > referee > workhorse > (hints, degraded only) > KEEP
+D GpuLlmCascadeStage                     GPU   → leftovers only
+        │   ├─ Qwen3-0.6B  (workhorse)  batches of 10, constrained JSON
+        │   │      └─ refereeQueue: unsure ∪ (keep + STRONG hint) ∪ (hide + no hint)
+        │   │                       ∪ missing ∪ mode-collapsed — capped at 8, labels excluded
+        │   └─ Gemma-4-E2B (referee)    contested values + a doc-type summary
+        │          RefereeBudget can skip Gemma entirely (dense page / small print)
+        ▼
+E MergePolicy.merge()                    CPU   → Map<spanId, SpanDecision>
+        │   user tap > layout KEEP > deterministic > referee > workhorse > (hints, degraded) > KEEP
         ▼
   redact/       Compose overlay (interactive)  ← what you see
                 RedactionEngine.render()       ← what you share: bars burned into a COPY
         ▼
-  share/        ACTION_SEND, redacted JPEG only
+  share/        ShareGuard, then ACTION_SEND, redacted JPEG only
 ```
 
 **No network.** The app declares no `INTERNET` permission (and `tools:node="remove"`s the
@@ -56,9 +63,77 @@ absent by policy — the process cannot make one.
 | `share/` | export + share sheet | FileProvider |
 | `ui/` | Compose screens, permission state, ViewModel | Compose |
 
-`MergePolicy`, `DecisionParser`, `CandidateHints` and `FitTransform` are **pure** — no Android
+`MergePolicy`, `DecisionParser`, `CandidateHints`, `CpuDeterministicStage`, `RefereeBudget`,
+`BackendReport`, `ShareGuard` and `FitTransform` are **pure** — no Android
 types — so the decision logic is unit-tested on the JVM with no device and no Robolectric.
 `SpanRect` exists instead of `android.graphics.Rect` specifically to keep that boundary.
+
+---
+
+## Hybrid silicon ownership
+
+The split is not decoration. It comes from Phone C's 17 hostile captures and 7 A/B pairs
+(`C-Outputs/SUMMARY.md`, `C-Outputs/compare.csv`, `C-Outputs/label-bugs.jsonl`), which showed the
+two things holding this app back were both *wrong-tool* problems:
+
+- **The repeatable quality bug is structural, not semantic.** 29 label/value inversions across 9
+  documents: `Account Holder` blacked out, `Priya Ramachandran` left readable; same for DOB, IFSC,
+  addresses, payslip HRA/LTA/PF captions (`C-001`, `C-002`, `C-003`, `C-017`). The referee restored
+  some letterheads after ~19 s and never once fixed the pairing.
+- **The latency is volume, not model size.** Median 53 s full cascade vs 30 s workhorse-only over
+  six pairs. Asking two models about every span is the cost.
+
+So each stage goes to the silicon that is actually good at it:
+
+| Stage | Silicon | Owns | Why |
+|---|---|---|---|
+| `OcrStage` (ML Kit) | CPU/NPU (ML Kit's choice) | text + boxes | already on-device |
+| `CpuDeterministicStage` | **CPU** | identifier regexes, label/value pairing, letterhead KEEP | a regex beats a 0.6B on `BDFPN2201L`, and geometry beats it on `Account Holder` |
+| `NpuClassifyStage` | **NPU** | small span classifier | **SKIPPED today** — see the NPU section. Never claimed unless it ran |
+| `GpuLlmCascadeStage` | **GPU** | Qwen3-0.6B → Gemma-4-E2B over *leftovers* | judgement calls: narration, prose, unpaired values |
+| `MergePolicy` + `RedactionEngine` + `ShareGuard` | CPU | one verdict per span, pixels, export | product rules, unchanged |
+
+The models never rewrite OCR text — they return verdicts keyed by span id, and `UNSURE` still
+means "stay visible".
+
+### Measured effect (iQOO 15 / I2501, GPU, `tools/testdoc-bank.png`, 47 spans)
+
+| | before (single cascade) | after (hybrid) |
+|---|---|---|
+| spans sent to Qwen | 47 | **19** |
+| referee queue | 8 | **5** |
+| `workhorse_ms` | 18338 | **7580** |
+| `referee_ms` | 10109 | **7945** |
+| `total_ms` | 28803 | **15871** |
+| over-redaction (must-keep hidden) | 1/24 = 4.2 % | **0/24 = 0 %** |
+| HIDE precision / recall | 0.929 / 0.650 | **1.000 / 0.700** |
+
+```
+cpu·det settled 28/47 spans (hide 11, keep 17) in 1ms; 19 left for the models
+hybrid: CPU·det 28 | NPU·cls skip | GPU·qwen 19 · gemma 5 | total 15.9s
+sources {DETERMINISTIC: 13, LAYOUT: 15, WORKHORSE: 12, REFEREE: 4}
+```
+
+Re-running C's own hostile fixtures on this build:
+
+| case | C measured | this build |
+|---|---|---|
+| `C-005-motion-blur` | 7490 ms, `spans=1 hide=0`, ordinary Share button | 0 ms of inference (no engine loaded), **Share warns** |
+| `C-008-small-print` | 70110 ms, hide 13 → **39** (black slab) | **9266 ms**, hide 31 from 27 exact regex hits, referee skipped |
+| `C-015-dense-ledger` | 266908 ms, hide 120, PAN/IFSC stripe still visible | **2086 ms**, hide 141/141, referee skipped |
+
+### The HUD line
+
+`BackendReport.hudLine()` prints one receipt per image:
+
+```
+CPU·det 28 | NPU·cls skip | GPU·qwen 19 · gemma 5 | total 15.9s
+```
+
+Groups are built from `StageReport`s, and an LLM stage's silicon comes from
+`LlmRuntime.backendLabel` — which is only set after a one-token warm-up generation *returned*. So
+on a handset without OpenCL the same page reads `CPU·det 28 · qwen 19 · gemma 5`, and
+`NPU·cls ok` is unreachable unless an NPU inference happened. `BackendReportTest` pins that.
 
 ---
 
@@ -100,6 +175,33 @@ complete JIT set (`libLiteRtCompilerPlugin_Qualcomm.so` + `libQnnIr.so` + `libQn
 NPU for CPU.
 
 On the iQOO 15 (2026-09-12, second pass) the HUD is **`on-device · local models · GPU`**.
+
+#### The NPU gate (`NpuGate`, `NpuClassifyStage`)
+
+`NpuClassifyStage` is the NPU's slot in the hybrid pipeline — a small span classifier between the
+CPU rules and the GPU cascade. It reports `SKIPPED` on this device and says why. Four things must
+all be true before anything is attempted:
+
+1. no crash marker from a previous launch,
+2. `libLiteRtDispatch_Qualcomm.so` in the APK's lib dir,
+3. vendor `libQnnHtp.so` on the device,
+4. a readable `libQnnHtpV*Stub.so`, plus the complete QAIRT set for JIT.
+
+**The Hexagon generation is read, not hard-coded.** The brief said V79; this handset ships
+`libQnnHtpV81Stub.so` / `libQnnHtpV81Skel.so`, and LiteRT's `supported_soc.csv` maps
+`Qualcomm,SM8850,v81,87`. `NpuSupport.hexagonGeneration()` scans `/vendor/lib64`,
+`/vendor/lib64/hw` and `/odm/lib64` and returns whatever it finds, so the gate is right on the
+device in front of us instead of on a number in a document. (The matching *skel* lives on the DSP
+side under `/vendor/lib/rfsa/adsp`, which an app process cannot list — the stub is the readable
+half of the pair.)
+
+**Crash marker.** A mismatched dispatch runtime does not throw: it calls `abort()` inside
+`Engine.initialize()`, killing the process with nothing catchable. So `NpuSupport.beginNpuAttempt`
+writes a marker file — containing a fingerprint of the dispatch `.so` — immediately before
+`Backend.NPU` is constructed, and deletes it as soon as that attempt has returned *or* thrown. If
+the marker is still there next launch, NPU is not attempted again. Because the marker records
+*which* library crashed, dropping in a different one (the whole point of the AI Hub follow-up)
+re-arms the attempt automatically instead of needing app data cleared.
 
 #### What this phone actually is
 
@@ -189,11 +291,27 @@ app/src/main/jniLibs/arm64-v8a/*.so                     # local fetch; gitignore
 Kit-transfer of the 2.5 GB referee: USB `adb push` from the laptop, or copy into the same
 `files/models/` folder via Office Kit. Do **not** put `.litertlm` files in the APK.
 
-#### Referee queue cap
+#### Referee budget: when Gemma runs at all
 
-Gemma is still GPU. `MergePolicy.REFEREE_QUEUE_CAP = 8`: leak-risk (missing decision, KEEP+STRONG,
+Two independent brakes, both from Phone C's A/B data:
+
+**Queue cap.** `MergePolicy.REFEREE_QUEUE_CAP = 8`: leak-risk (missing decision, KEEP+STRONG,
 UNSURE) always goes; uncorroborated HIDE fills remaining slots. Labels never enter the queue
 (layout KEEP precision unchanged).
+
+**Page-shape veto** (`RefereeBudget`). The referee is skipped entirely when:
+
+| Rule | Threshold | Evidence |
+|---|---|---|
+| dense page | `spans > 100` | `C-015`: 141 spans, `referee_ms=174627`, and hide went 131 → **120** — it *removed* redactions and still left a PAN/IFSC stripe readable |
+| small print | `spans ≥ 40` and median line height `< 1.0 %` of page height | `C-008`: 6–9 pt MSA, hide 13 → **39**, +35 s, page became an unreadable slab |
+
+Both are quality decisions as much as latency ones: on those two pages the *workhorse-only* output
+was strictly better than the refereed output. The threshold is measured, logged
+(`median_h=` in `BlackoutStats`) and surfaced in the debug panel as `no-gemma`, so it can be
+re-tuned against evidence rather than guessed at. Reference points on device:
+`C-008` median 13 px = 0.007 (skip), `C-015` median 9 px (skipped on span count first),
+`testdoc-bank` median 22 px = 0.0125 (**runs**), C's 10–11 pt statements ~0.013 (runs).
 
 #### GPU (this phone)
 
@@ -273,10 +391,14 @@ Priority, highest first:
 
 1. **User tap** — always wins.
 2. **Layout** — a span identified as a field label stays visible. Beats both models.
-3. **Referee** (Gemma).
-4. **Workhorse** (Qwen).
-5. **Hints** — *only* when degraded.
-6. **Default → KEEP.**
+3. **Deterministic** (`CpuDeterministicStage`) — a high-confidence identifier pattern, or the value
+   paired with a sensitive caption. Above both models because C measured them getting exactly these
+   spans wrong, in both directions, on every two-column form. In practice there is nothing to
+   conflict with: these spans were never sent to a model.
+4. **Referee** (Gemma).
+5. **Workhorse** (Qwen).
+6. **Hints** — *only* when degraded.
+7. **Default → KEEP.**
 
 Two properties this encodes:
 
@@ -329,6 +451,19 @@ Two different renderings, on purpose:
 - **On export** — `RedactionEngine.render()` allocates a **copy** and burns filled rects into
   pixels. Nothing blurs or pixelates: only an opaque rect can't be inverted back out.
 
+### The share guard
+
+`ShareGuard` sits in front of the share sheet. Phone C's `C-005-motion-blur`: a camera-shaken bank
+statement gave ML Kit **one** span, so `hide=0`, and the app offered an ordinary `Share` button
+over a page whose PAN, account number, IFSC, phone, email and address were all legible. Every
+component behaved correctly and the user still got a confident-looking result with nothing hidden.
+
+The rule compares span count to image *area*: fewer than **4 recognised regions per megapixel**
+with nothing redacted means either "this isn't a document" or "we couldn't read the document", and
+we can't tell which — so it warns and requires a confirmation instead of blocking, because sharing
+an ordinary photo through Blackout is legitimate. `C-005` scores 0.5 spans/MP (warns);
+`testdoc-bank` ~21 and C's readable statements 30–60 (silent).
+
 `ShareRedacted.share()` takes the *composed* bitmap. It has no access to the original and no
 parameter through which one could be passed, so there is no code path that writes the unredacted
 image to disk. Re-encoding to JPEG also means **no EXIF survives** — no timestamp, no device, no
@@ -360,8 +495,17 @@ Nothing fails silently into "share the original".
 - **Residual label misses.** Two-column forms with a detected label column keep captions visible
   structurally. Captions outside that pattern (stacked PAN/Aadhaar cards, one-off headings,
   lexicon misses) still go to the models. Conservative; one tap fixes each.
-- **Referee cost.** Gemma on CPU is ~1.7 s/span; a heavily contested page can take minutes. A
-  queue cap, or dropping to `Qwen3-1.7B` as referee, is the obvious next lever.
+- **Hostile geometry — no deskew.** Bars are axis-aligned, so a skewed, crumpled or 90°-rotated page
+  gets rectangles next to its text: `C-006` (36° skew, 3 misplaced bars), `C-010` (crumpled, 80
+  spans), `C-016` (rotated 90°, 87 spans of sideways soup). This is an OCR/geometry problem and more
+  model does not touch it — C measured the referee spending 5.6 s on `C-006` for an identical
+  result. Deskew/OSD before OCR is the fix and is **not** in this milestone.
+- **Devanagari.** `C-007`: **0 of 8** Hindi strings read (tofu boxes); the Latin name and DOB on the
+  same page were caught by pairing. Needs a Devanagari recognizer, not a bigger LLM.
+- **Amounts and narration still leak.** On `testdoc-bank` the remaining 6/20 misses are all model
+  judgement calls the CPU stage deliberately does not touch: `Rs 1,24,500.00`, `-4,200.00`,
+  `UPI to RAHUL MEHTA`, `NEFT to LANDLORD S IYER`. Widening the regexes to catch these is how you
+  get C-008's black slab, so they stay with the models.
 - **Line-granularity spans.** Hiding a line hides its label too when both sit in one OCR line.
   Word-level rects within a hidden line would be tighter. Not started — a different milestone
   than pairing two-column boxes.

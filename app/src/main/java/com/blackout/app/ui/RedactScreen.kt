@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,10 +29,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,6 +76,7 @@ fun RedactScreen(
     val context = LocalContext.current
     val original = viewModel.original
     val image = remember(original) { original?.asImageBitmap() }
+    var pendingShareWarning by remember { mutableStateOf<String?>(null) }
 
     // One haptic when a pass lands and the bars appear.
     LaunchedEffect(state.phase) {
@@ -142,7 +147,7 @@ fun RedactScreen(
 
         HudChip(
             degraded = state.degraded,
-            backend = state.analysis.hudBackend,
+            backend = state.analysis.backendReport.chip().ifBlank { state.analysis.hudBackend },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -162,6 +167,7 @@ fun RedactScreen(
             DebugPanel(
                 state = state,
                 inventory = viewModel.modelInventory(),
+                npuGate = viewModel.npuGate(),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -173,7 +179,13 @@ fun RedactScreen(
             enabled = state.phase == Phase.READY,
             hideCount = state.hideCount,
             onRetake = onRetake,
-            onShare = { viewModel.original?.let { onShare(it) } },
+            onShare = {
+                // C-005: a motion-blurred statement produced one span, zero bars, and a normal
+                // share button. Make the user look at that before it leaves the app.
+                val warning = state.shareWarning
+                if (warning != null) pendingShareWarning = warning
+                else viewModel.original?.let { onShare(it) }
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -183,6 +195,25 @@ fun RedactScreen(
         if (state.phase == Phase.WORKING) {
             WorkingOverlay(state.statusLine)
         }
+    }
+
+    pendingShareWarning?.let { warning ->
+        AlertDialog(
+            onDismissRequest = { pendingShareWarning = null },
+            title = { Text(stringResource(R.string.share_guard_title)) },
+            text = { Text(warning) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingShareWarning = null
+                    viewModel.original?.let { onShare(it) }
+                }) { Text(stringResource(R.string.share_anyway)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingShareWarning = null }) {
+                    Text(stringResource(R.string.share_guard_back))
+                }
+            },
+        )
     }
 }
 
@@ -223,6 +254,7 @@ private fun HudChip(degraded: Boolean, backend: String?, modifier: Modifier = Mo
 private fun DebugPanel(
     state: RedactUiState,
     inventory: String,
+    npuGate: String,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -232,9 +264,11 @@ private fun DebugPanel(
     ) {
         Column(Modifier.padding(12.dp)) {
             DebugLine("spans", "${state.spans.size}   ocr ${state.ocrMs}ms")
+            DebugLine("hybrid", state.analysis.backendReport.hudLine())
             DebugLine("verdict", "hide ${state.hideCount} · keep ${state.keepCount} · unsure ${state.unsureCount}")
             DebugLine("overrides", "${state.overrides.size} tap(s)")
             state.analysis.docSummary?.let { DebugLine("doctype", it) }
+            state.analysis.refereeSkipReason?.let { DebugLine("no-gemma", it) }
             for (stat in state.analysis.stats) {
                 DebugLine(
                     stat.label,
@@ -246,6 +280,7 @@ private fun DebugPanel(
                 DebugLine("inference", "${state.analysis.totalMs}ms total")
             }
             state.analysis.degradedReason?.let { DebugLine("degraded", it) }
+            DebugLine("npu", npuGate)
             DebugLine("models", inventory)
         }
     }

@@ -383,3 +383,70 @@ and Gemma-4 packs, gated Gemma3-1B SM8850.
 **Referee:** `REFEREE_QUEUE_CAP = 8`, leak-risk never dropped. GPU re-measure on the same
 fixture: `referee_queue=8` `referee_ms=10109` (was 12879–18640 at queue 14). Over-redaction
 still **1/24 = 4.2%**. HUD `on-device · local models · GPU`. No INTERNET in dumpsys.
+
+---
+
+## 2026-09-12 - Session 9 - HYBRID silicon architecture
+
+Read Phone C's evidence first (`C-Outputs/SUMMARY.md`, `label-bugs.jsonl` 29 rows, `compare.csv`,
+edge cases C-001/002/003/005/008/015/017) and treated it as ground truth instead of re-deriving it.
+Two findings drove the whole change: the repeatable quality bug is *structural* (labels blacked,
+values visible, on every two-column form) and the latency is *volume* (median 53s full vs 30s
+workhorse), not model size.
+
+**Restructured the pipeline into `HybridRedactPipeline`** with one stage per piece of silicon.
+`RedactionAnalyzer.kt` is gone; the cascade moved into `GpuLlmCascadeStage.kt`.
+
+- `CpuDeterministicStage` (new, pure): STRONG identifier regex -> HIDE the value; VALUE paired with
+  a sensitive caption -> HIDE; field label / letterhead -> KEEP. Settled spans are removed from the
+  model queue entirely. Added IFSC and UPI hint kinds; PHONE only decides alone when nothing
+  money-shaped is in the same span (so ledger amounts still go to the models). Added payslip and
+  address captions to `FieldLayout`'s lexicon - HRA/LTA/PF and "Communication Address" were not
+  recognised as captions at all, which is why C saw them blacked out.
+- `NpuClassifyStage` + `NpuGate` (new): gated slot, reports SKIPPED with a reason. Probes vendor
+  `libQnnHtp.so` and reads the Hexagon generation off the device (this phone is **V81**, not the
+  V79 in the brief; LiteRT's supported_soc.csv agrees on v81 for SM8850). Added a crash marker
+  fingerprinted to the dispatch .so, because a wrong dispatch runtime aborts the process instead of
+  throwing - if the marker survives a launch, NPU is not attempted again.
+- `GpuLlmCascadeStage`: leftovers only. `RefereeBudget` (new, pure) skips Gemma when spans > 100
+  (C-015) or median line height < 1.0% of page height with >= 40 spans (C-008).
+- `BackendReport` (new, pure): per-image receipt `CPU-det N | NPU-cls skip | GPU-qwen N - gemma N |
+  total Xs`, built from what actually ran. LLM silicon comes from `backendLabel`, which is only set
+  after a warm-up generate returns, so a silent XNNPACK fallback reads CPU. `NPU-cls ok` is
+  unreachable without an NPU inference.
+- `ShareGuard` (new, pure): warns before sharing when a page has < 4 recognised regions per
+  megapixel and nothing was redacted. This is C-005, where a blurred statement gave 1 span, 0 bars
+  and a normal Share button.
+
+**Measured on the iQOO 15 (I2501), GPU, `tools/testdoc-bank.png`, 47 spans:**
+
+| | before | after |
+|---|---|---|
+| spans to Qwen | 47 | 19 |
+| referee queue | 8 | 5 |
+| workhorse_ms | 18338 | 7580 |
+| referee_ms | 10109 | 7945 |
+| total_ms | 28803 | 15871 |
+| over-redaction | 1/24 = 4.2% | 0/24 = 0% |
+| HIDE precision / recall | 0.929 / 0.650 | 1.000 / 0.700 |
+
+`hybrid: CPU-det 28 | NPU-cls skip | GPU-qwen 19 - gemma 5 | total 15.9s`
+
+**Re-ran C's hostile fixtures on this build:**
+
+- `C-005-motion-blur`: no engine loaded at all (0 ms inference vs C's 7490 ms) and the share guard
+  dialog fires. Screenshot confirmed on device.
+- `C-008-small-print`: 70110 ms -> 9266 ms; referee skipped ("small print: median line 13px is
+  0.007 of page"); 31 hides from 27 exact regex hits instead of C's 39-hide black slab.
+- `C-015-dense-ledger`: 266908 ms -> 2086 ms; referee skipped on span count; 141/141 identifiers
+  hidden vs C's 120 with a readable PAN/IFSC stripe.
+
+**Tests:** 64 -> 94 green. New: `CpuDeterministicStageTest` (label-bugs.jsonl rows as fixtures -
+caption keeps, value hides; settled spans never reach a model; transaction dates and amounts stay
+with the models), `RefereeBudgetTest`, `BackendReportTest` (a skipped NPU stage can never read as
+an inference; a CPU fallback never reads GPU), `ShareGuardTest`, `ManifestPolicyTest` (INTERNET and
+ACCESS_NETWORK_STATE carry `tools:node="remove"`, and the merged manifest has neither),
+`NpuSupportTest` (the exact dispatch+plugin-without-QAIRT drop-in that lied is refused).
+
+**Unchanged:** no INTERNET in `dumpsys` (CAMERA + VIBRATE only), NPU still blocked on external
+artifacts (ask list in ARCH.md), Share/EXIF behaviour, UNSURE never hides.
