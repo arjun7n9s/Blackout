@@ -164,16 +164,11 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
             val straightened = Deskew.straighten(bitmap, firstPass, ocr)
             val result = straightened.ocr
             if (straightened.appliedDeg != 0f) {
-                // The rotated bitmap is now the working image: span rects are in its coordinates,
-                // so the overlay, the uncensor gesture and the export must all use it.
-                original = straightened.bitmap
-                _state.update {
-                    it.copy(
-                        imageWidth = straightened.bitmap.width,
-                        imageHeight = straightened.bitmap.height,
-                        deskewDeg = straightened.appliedDeg,
-                    )
-                }
+                // The rotation stays backstage. [original] is still the photograph that was taken,
+                // because handing back a turned picture with empty corners is its own bug - the
+                // user framed that shot. Spans are analysed on the straightened page and carried
+                // back at the end, which is what `deskewTransform` is held for.
+                _state.update { it.copy(deskewDeg = straightened.appliedDeg) }
             }
 
             if (result.spans.isEmpty()) {
@@ -213,7 +208,25 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
 
             // Merge the layout-applied spans. Using the raw OCR list here is how FieldLayout
             // compiled and still left every caption STANDALONE - LAYOUT KEEP never fired.
-            applyAnalysis(analysis.spans.ifEmpty { result.spans }, analysis, wallStart)
+            val judged = analysis.spans.ifEmpty { result.spans }
+
+            // Carry the verdicts back onto the photograph the user actually took. Everything
+            // above this line reasoned about a straightened page; nothing below it should know
+            // that page existed. An axis-aligned box up there becomes a tilted quad down here,
+            // which is the shape the bars are drawn as.
+            val onOriginal = if (straightened.appliedDeg != 0f) {
+                Deskew.mapBack(
+                    judged,
+                    Deskew.transformFor(bitmap.width, bitmap.height, straightened.appliedDeg),
+                )
+            } else {
+                judged
+            }
+
+            // The straightened copy is a full-size bitmap and nothing refers to it now.
+            if (straightened.bitmap !== bitmap) straightened.bitmap.recycle()
+
+            applyAnalysis(onOriginal, analysis, wallStart)
         }
     }
 
@@ -232,6 +245,15 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
             degraded = analysis.degraded,
         )
         logStats(spans, analysis, decisions, wallStart)
+        if (com.blackout.app.BuildConfig.DEBUG) {
+            val withQuad = spans.count { it.quad != null }
+            val angles = spans.mapNotNull { it.quad?.angleDeg }.sorted()
+            Log.i(
+                STATS_TAG,
+                "quads=$withQuad/${spans.size} " +
+                    "quad_angle_median=${angles.getOrNull(angles.size / 2)?.let { "%.1f".format(it) }}",
+            )
+        }
         _state.update {
             it.copy(
                 phase = Phase.READY,

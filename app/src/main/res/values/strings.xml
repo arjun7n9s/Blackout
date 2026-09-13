@@ -48,4 +48,11 @@
     <string name="persona_done">Done</string>
     <string name="persona_chip">To: %1$s</string>
     <string name="persona_selected_mark">OK</string>
+    <string name="camera_privacy_chip">On-device · nothing leaves this phone</string>
+    <string name="camera_hint">Fill the frame with the document</string>
+    <string name="camera_hint_blocked">Camera access is off</string>
+    <string name="camera_permission_title">Camera access</string>
+    <string name="camera_permission_body">Blackout reads documents through the camera. Nothing is uploaded and nothing is stored outside this app.</string>
+    <string name="camera_permission_allow">Allow camera</string>
+    <string name="camera_permission_gallery">Or choose an image instead</string>
 </resources>

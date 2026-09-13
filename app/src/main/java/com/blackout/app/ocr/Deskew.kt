@@ -195,6 +195,54 @@ object Deskew {
         return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
     }
 
+    /**
+     * The exact original -> straightened mapping [rotate] performs, as invertible arithmetic.
+     *
+     * See [PageTransform] for why this is not an `android.graphics.Matrix`.
+     */
+    fun transformFor(width: Int, height: Int, degrees: Float): PageTransform =
+        PageTransform.forRotation(width, height, degrees)
+
+    /**
+     * Carries spans measured on the straightened page back onto the original capture.
+     *
+     * Deskew exists to help the *detectors*: upright text recovers detections a tilted page loses
+     * (28 of 47 spans settled upright against 8 at 30 degrees). None of that requires showing the
+     * user a rotated photograph, and doing so is its own bug - the framing they composed comes
+     * back turned, with empty corners where the canvas grew.
+     *
+     * So the rotation stays internal. Every span's footprint is mapped back through the inverse
+     * transform, which turns an axis-aligned box on the straightened page into a *tilted quad* on
+     * the original - exactly the shape [SpanQuad] exists to paint. The picture is the one that was
+     * taken; only the bars are rotated, and they are rotated to match the text.
+     *
+     * A span with no corner points gets one synthesised from its rect first, so the mapping is
+     * uniform and nothing falls back to an axis-aligned bar on a tilted line.
+     */
+    fun mapBack(spans: List<TextSpan>, forward: PageTransform): List<TextSpan> = spans.map { span ->
+        val quad = span.quad ?: SpanQuad.fromRect(span.rect)
+        val mapped = SpanQuad(
+            topLeft = forward.invert(quad.topLeft),
+            topRight = forward.invert(quad.topRight),
+            bottomRight = forward.invert(quad.bottomRight),
+            bottomLeft = forward.invert(quad.bottomLeft),
+        )
+        // rect becomes the axis-aligned hull of the mapped quad: it is what hit-testing uses, and
+        // being generous there is right for a touch target.
+        span.copy(quad = mapped, rect = hullOf(mapped))
+    }
+
+    private fun hullOf(quad: SpanQuad): SpanRect {
+        val xs = quad.points.map { it.x }
+        val ys = quad.points.map { it.y }
+        return SpanRect(
+            left = xs.min().toInt(),
+            top = ys.min().toInt(),
+            right = xs.max().toInt(),
+            bottom = ys.max().toInt(),
+        )
+    }
+
     private fun charCount(spans: List<TextSpan>): Int =
         spans.sumOf { it.text.count { c -> !c.isWhitespace() } }
 

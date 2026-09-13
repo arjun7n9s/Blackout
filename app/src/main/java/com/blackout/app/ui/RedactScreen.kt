@@ -159,8 +159,10 @@ fun RedactScreen(
                         // A slanted line is painted as its true oriented quad, exactly as
                         // RedactionEngine will burn it. The preview is the user's only evidence
                         // of what leaves the app, so the two must not disagree.
+                        // The quad's own angle, not span.angleDeg - after Deskew.mapBack the field
+                        // describes the straightened page and the quad describes the photograph.
                         val quad = span.quad
-                            ?.takeIf { SkewMetrics.deviationFromHorizontal(span.angleDeg) >= 3f }
+                            ?.takeIf { SkewMetrics.deviationFromHorizontal(it.angleDeg) >= 3f }
                             ?.inflate(pad)
                         if (quad != null && hidden) {
                             drawPath(

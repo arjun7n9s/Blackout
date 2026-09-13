@@ -32,6 +32,53 @@ data class SpanRect(
 data class SpanPoint(val x: Float, val y: Float)
 
 /**
+ * The rotation [com.blackout.app.ocr.Deskew] applies, as arithmetic rather than as an
+ * `android.graphics.Matrix`.
+ *
+ * Deliberately pure. This maps every redaction bar from the straightened page back onto the
+ * photograph, so getting it wrong puts bars in the wrong place - and a `Matrix` cannot be
+ * exercised by a JVM unit test. This session already shipped an APK that redacted nothing while
+ * 179 tests passed, because the broken thing was an Android type the tests could not reach. Not
+ * twice.
+ *
+ * Matches `Bitmap.createBitmap(src, .., matrix, ..)` exactly: rotate about the origin, then shift
+ * so the rotated bounding box starts at (0, 0).
+ */
+data class PageTransform(
+    val cos: Float,
+    val sin: Float,
+    val tx: Float,
+    val ty: Float,
+) {
+    /** original -> straightened */
+    fun apply(p: SpanPoint) = SpanPoint(
+        cos * p.x - sin * p.y + tx,
+        sin * p.x + cos * p.y + ty,
+    )
+
+    /** straightened -> original */
+    fun invert(p: SpanPoint): SpanPoint {
+        val x = p.x - tx
+        val y = p.y - ty
+        return SpanPoint(cos * x + sin * y, -sin * x + cos * y)
+    }
+
+    companion object {
+        fun forRotation(width: Int, height: Int, degrees: Float): PageTransform {
+            val rad = Math.toRadians(degrees.toDouble())
+            val c = kotlin.math.cos(rad).toFloat()
+            val s = kotlin.math.sin(rad).toFloat()
+            val w = width.toFloat()
+            val h = height.toFloat()
+            // The four corners after rotating about the origin.
+            val xs = listOf(0f, c * w, c * w - s * h, -s * h)
+            val ys = listOf(0f, s * w, s * w + c * h, c * h)
+            return PageTransform(c, s, -xs.min(), -ys.min())
+        }
+    }
+}
+
+/**
  * The four corners of a text line as it actually sits on the page.
  *
  * [SpanRect] is the axis-aligned box *around* these, which is all you need for hit-testing but is
@@ -51,6 +98,32 @@ data class SpanQuad(
     val bottomLeft: SpanPoint,
 ) {
     val points: List<SpanPoint> get() = listOf(topLeft, topRight, bottomRight, bottomLeft)
+
+    /**
+     * The baseline's own angle, in degrees, derived from the top edge.
+     *
+     * Read from the geometry rather than carried alongside it in [TextSpan.angleDeg]. Once spans
+     * are mapped out of deskewed space and back onto the original capture, that field still holds
+     * the *deskewed* angle - near zero - while the quad is genuinely tilted. Anything deciding
+     * "is this slanted enough to paint as a quad" has to ask the shape it is about to paint.
+     */
+    val angleDeg: Float
+        get() = Math.toDegrees(
+            kotlin.math.atan2(
+                (topRight.y - topLeft.y).toDouble(),
+                (topRight.x - topLeft.x).toDouble(),
+            )
+        ).toFloat()
+
+    companion object {
+        /** An axis-aligned quad covering [rect]. Used when ML Kit gave us no corner points. */
+        fun fromRect(rect: SpanRect) = SpanQuad(
+            topLeft = SpanPoint(rect.left.toFloat(), rect.top.toFloat()),
+            topRight = SpanPoint(rect.right.toFloat(), rect.top.toFloat()),
+            bottomRight = SpanPoint(rect.right.toFloat(), rect.bottom.toFloat()),
+            bottomLeft = SpanPoint(rect.left.toFloat(), rect.bottom.toFloat()),
+        )
+    }
 
     /**
      * Grows the quad by [px] on every side, along its **own** axes.

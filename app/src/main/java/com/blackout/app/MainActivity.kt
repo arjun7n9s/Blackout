@@ -38,11 +38,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.blackout.app.camera.decodeSampledBitmap
 import com.blackout.app.share.ShareRedacted
 import com.blackout.app.ui.CameraScreen
-import com.blackout.app.ui.HomeScreen
 import com.blackout.app.ui.PhotoPreviewScreen
 import com.blackout.app.ui.RedactScreen
 import com.blackout.app.ui.RedactViewModel
-import com.blackout.app.ui.rememberCameraPermissionState
 import com.blackout.app.ui.theme.BlackoutTheme
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -177,12 +175,14 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * v0 navigation is a single state value rather than Navigation-Compose: there are three
- * destinations and one of them carries a [Bitmap], which is awkward to pass through a nav graph.
- * Swap this out once there are real routes to deep-link into.
+ * Navigation is a single state value rather than Navigation-Compose: there are three destinations
+ * and one of them carries a [Bitmap], which is awkward to pass through a nav graph. Swap this out
+ * once there are real routes to deep-link into.
+ *
+ * [Camera] is the root. Blackout does one thing, so it opens on the thing - the menu screen that
+ * used to sit in front offered exactly two destinations, and both are controls on the camera now.
  */
 private sealed interface Screen {
-    data object Home : Screen
     data object Camera : Screen
     /** Capture review: keep or retake, before spending inference on it. */
     data class Preview(val photo: Bitmap) : Screen
@@ -196,10 +196,7 @@ private fun BlackoutApp(sharedImage: Uri? = null, fixture: Bitmap? = null) {
     val scope = rememberCoroutineScope()
     val snackbars = remember { SnackbarHostState() }
 
-    var screen by remember { mutableStateOf<Screen>(Screen.Home) }
-    var awaitingPermission by remember { mutableStateOf(false) }
-
-    val permission = rememberCameraPermissionState()
+    var screen by remember { mutableStateOf<Screen>(Screen.Camera) }
     val redactViewModel: RedactViewModel = viewModel()
 
     fun toast(message: String) {
@@ -225,14 +222,6 @@ private fun BlackoutApp(sharedImage: Uri? = null, fixture: Bitmap? = null) {
         screen = Screen.Redact
     }
 
-    // If the user tapped "Take photo" before granting, open the camera as soon as they allow it.
-    LaunchedEffect(permission.granted, awaitingPermission) {
-        if (awaitingPermission && permission.granted) {
-            awaitingPermission = false
-            screen = Screen.Camera
-        }
-    }
-
     val galleryPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -242,34 +231,21 @@ private fun BlackoutApp(sharedImage: Uri? = null, fixture: Bitmap? = null) {
         else screen = Screen.Preview(bitmap)
     }
 
-    BackHandler(enabled = screen !is Screen.Home) { screen = Screen.Home }
+    // Back returns to the viewfinder from anywhere; from the viewfinder it leaves the app.
+    BackHandler(enabled = screen !is Screen.Camera) { screen = Screen.Camera }
 
     Box(Modifier.fillMaxSize()) {
         when (val current = screen) {
-            Screen.Home -> HomeScreen(
-                permission = permission,
-                onTakePhoto = {
-                    if (permission.granted) {
-                        screen = Screen.Camera
-                    } else {
-                        awaitingPermission = true
-                        permission.request()
-                    }
-                },
+            Screen.Camera -> CameraScreen(
+                onCaptured = { screen = Screen.Preview(it) },
                 onPickFromGallery = {
                     galleryPicker.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
-            )
-
-            Screen.Camera -> CameraScreen(
-                onCaptured = { screen = Screen.Preview(it) },
-                onClose = { screen = Screen.Home },
-                onError = { message ->
-                    screen = Screen.Home
-                    toast(message)
-                },
+                // Stay put on a camera error. Bouncing to another screen used to hide the very
+                // viewfinder the message is about, and there is nowhere better to go now.
+                onError = { message -> toast(message) },
             )
 
             is Screen.Preview -> PhotoPreviewScreen(

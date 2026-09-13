@@ -75,7 +75,12 @@ object RedactionEngine {
      */
     private fun slantedQuad(span: TextSpan): SpanQuad? {
         val quad = span.quad ?: return null
-        return quad.takeIf { SkewMetrics.deviationFromHorizontal(span.angleDeg) >= SLANT_THRESHOLD_DEG }
+        // The quad's own angle, not TextSpan.angleDeg. After Deskew.mapBack the field still holds
+        // the straightened page's angle - near zero - while the quad carries the real tilt of the
+        // photograph. Asking the field would paint an axis-aligned slab over slanted text.
+        return quad.takeIf {
+            SkewMetrics.deviationFromHorizontal(it.angleDeg) >= SLANT_THRESHOLD_DEG
+        }
     }
 
     private fun pathOf(quad: SpanQuad): Path = Path().apply {
