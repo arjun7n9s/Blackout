@@ -148,20 +148,37 @@ object Deskew {
         if (after.spans.isEmpty()) return false
         val had = charCount(before.spans)
         val got = charCount(after.spans)
-        if (got < had - lossTolerance(had)) return false
 
-        val tighter = medianHeight(before.spans).let { was ->
-            was > 0 && medianHeight(after.spans) <= was * (1f - MIN_HEIGHT_GAIN)
-        }
-        return got > had || tighter
+        val wasHigh = medianHeight(before.spans)
+        val heightGain =
+            if (wasHigh > 0) 1f - medianHeight(after.spans).toFloat() / wasHigh else 0f
+
+        if (got < had - lossTolerance(had, heightGain)) return false
+        return got > had || heightGain >= MIN_HEIGHT_GAIN
     }
 
     /**
-     * How much text a rotation may lose and still count. Small, and never zero: OCR is not
-     * deterministic to the character across a resample, and a rigid `>=` rejected a correct
-     * quarter-turn over one glyph in 649.
+     * How much text a rotation may lose and still count, given how much the boxes tightened.
+     *
+     * Never zero: OCR is not deterministic to the character across a resample, and a rigid `>=`
+     * once rejected a correct quarter-turn over one glyph in 649.
+     *
+     * Nor is it a flat percentage, which was the next thing to go wrong. A real handheld capture
+     * of a sideways card read 139 characters upright against 136 rotated - a 2.2% loss - while
+     * the median span height fell from 426 px to 48 px. A fixed 2% gate threw away a correction
+     * carrying nine-to-one geometric evidence, and the page stayed on its side.
+     *
+     * So the allowance scales with that evidence: 2% when the boxes barely moved, up to 10% when
+     * they collapse. A rotation that cannot show a geometric win is still held to the strict bar,
+     * which is what keeps a wrong angle - and a 180° flip, where the height never changes - out.
      */
-    private fun lossTolerance(had: Int): Int = maxOf(2, had / 50)
+    private fun lossTolerance(had: Int, heightGain: Float): Int {
+        val share = BASE_LOSS + (MAX_LOSS - BASE_LOSS) * heightGain.coerceIn(0f, 1f)
+        return maxOf(2, (had * share).toInt())
+    }
+
+    private const val BASE_LOSS = 0.02f
+    private const val MAX_LOSS = 0.10f
 
     /** Fractional drop in median span height that counts as the boxes genuinely tightening. */
     private const val MIN_HEIGHT_GAIN = 0.15f

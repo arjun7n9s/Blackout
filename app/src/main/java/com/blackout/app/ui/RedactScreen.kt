@@ -42,7 +42,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import com.blackout.app.ocr.SkewMetrics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -130,6 +132,33 @@ fun RedactScreen(
                         val top = t.viewTop(r) - pad * t.scale
                         val w = t.viewWidth(r) + pad * 2 * t.scale
                         val h = t.viewHeight(r) + pad * 2 * t.scale
+
+                        // A slanted line is painted as its true oriented quad, exactly as
+                        // RedactionEngine will burn it. The preview is the user's only evidence
+                        // of what leaves the app, so the two must not disagree.
+                        val quad = span.quad
+                            ?.takeIf { SkewMetrics.deviationFromHorizontal(span.angleDeg) >= 3f }
+                            ?.inflate(pad)
+                        if (quad != null && hidden) {
+                            drawPath(
+                                Path().apply {
+                                    val pts = quad.points
+                                    moveTo(
+                                        pts[0].x * t.scale + t.offsetX,
+                                        pts[0].y * t.scale + t.offsetY,
+                                    )
+                                    for (i in 1 until pts.size) {
+                                        lineTo(
+                                            pts[i].x * t.scale + t.offsetX,
+                                            pts[i].y * t.scale + t.offsetY,
+                                        )
+                                    }
+                                    close()
+                                },
+                                Color.Black,
+                            )
+                            continue
+                        }
 
                         when {
                             hidden -> drawRect(Color.Black, Offset(left, top), Size(w, h))

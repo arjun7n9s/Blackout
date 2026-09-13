@@ -4,7 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
+import com.blackout.app.ocr.SkewMetrics
+import com.blackout.app.ocr.SpanQuad
 import com.blackout.app.ocr.TextSpan
 
 /**
@@ -41,6 +44,11 @@ object RedactionEngine {
         for (span in spans) {
             if (span.id !in hiddenIds) continue
             val pad = paddingFor(span)
+            val quad = slantedQuad(span)
+            if (quad != null) {
+                canvas.drawPath(pathOf(quad.inflate(pad.toFloat())), paint)
+                continue
+            }
             val r = span.rect.inflate(pad, copy.width, copy.height)
             val radius = (r.height * 0.12f).coerceAtMost(10f)
             canvas.drawRoundRect(
@@ -52,6 +60,33 @@ object RedactionEngine {
         }
         return copy
     }
+
+    /**
+     * The span's oriented footprint, but only when it is actually slanted.
+     *
+     * Upright text keeps the rounded rectangle: it is the overwhelmingly common case after
+     * [com.blackout.app.ocr.Deskew], and a sharp-cornered path there would be a visual regression
+     * for no benefit. Past [SLANT_THRESHOLD_DEG] the axis-aligned box stops being an honest
+     * shape - a 400x22 px line at 30 degrees needs a 123 px tall box, so the bar buries five
+     * times more of the page than the text it is covering.
+     *
+     * This is a *cosmetic* fix, not a safety one. The axis-aligned box always contains the
+     * glyphs, so the old behaviour over-covered but never leaked.
+     */
+    private fun slantedQuad(span: TextSpan): SpanQuad? {
+        val quad = span.quad ?: return null
+        return quad.takeIf { SkewMetrics.deviationFromHorizontal(span.angleDeg) >= SLANT_THRESHOLD_DEG }
+    }
+
+    private fun pathOf(quad: SpanQuad): Path = Path().apply {
+        val p = quad.points
+        moveTo(p[0].x, p[0].y)
+        for (i in 1 until p.size) lineTo(p[i].x, p[i].y)
+        close()
+    }
+
+    /** Below this the axis-aligned box is tight enough that a rotated bar buys nothing. */
+    private const val SLANT_THRESHOLD_DEG = 3f
 
     private fun paddingFor(span: TextSpan): Int =
         (span.rect.height * PADDING_RATIO).toInt().coerceAtLeast(MIN_PADDING_PX)

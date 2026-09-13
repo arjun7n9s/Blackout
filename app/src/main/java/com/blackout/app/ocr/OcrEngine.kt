@@ -49,6 +49,7 @@ class MlKitOcrEngine : OcrEngine {
                             rect = SpanRect(box.left, box.top, box.right, box.bottom),
                             confidence = line.confidence ?: 0f,
                             angleDeg = line.angle,
+                            quad = quadOf(line.cornerPoints),
                             blockIndex = blockIndex,
                             lineIndex = lineIndex,
                         )
@@ -69,5 +70,18 @@ class MlKitOcrEngine : OcrEngine {
 
     override fun close() {
         runCatching { recognizer.close() }
+    }
+
+    /**
+     * ML Kit's four corner points, in its own documented order: top-left, top-right,
+     * bottom-right, bottom-left *relative to the line's own rotation*.
+     *
+     * Null unless there are exactly four - anything else is not a quadrilateral and the caller
+     * falls back to the axis-aligned [SpanRect].
+     */
+    private fun quadOf(corners: Array<android.graphics.Point>?): SpanQuad? {
+        if (corners == null || corners.size != 4) return null
+        fun at(i: Int) = SpanPoint(corners[i].x.toFloat(), corners[i].y.toFloat())
+        return SpanQuad(at(0), at(1), at(2), at(3))
     }
 }

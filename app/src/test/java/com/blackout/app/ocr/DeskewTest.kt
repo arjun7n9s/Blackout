@@ -145,6 +145,25 @@ class DeskewTest {
     }
 
     @Test
+    fun `overwhelming geometric evidence buys a little tolerance for OCR noise`() {
+        // A real handheld capture of a sideways card, verbatim from the device: 139 characters
+        // upright against 136 rotated, while the median span height fell 426 px -> 48 px. A flat
+        // 2% loss gate threw away a correction carrying nine-to-one evidence and left the page on
+        // its side.
+        val before = ocr("x".repeat(139), height = 426)
+        val after = ocr("x".repeat(136), height = 48)
+        assertTrue(Deskew.accepts(before, after))
+    }
+
+    @Test
+    fun `a rotation with no geometric win is still held to the strict bar`() {
+        // Same 2.2% loss, but the boxes did not move - so there is nothing to weigh against it.
+        val before = ocr("x".repeat(139), height = 40)
+        val after = ocr("x".repeat(136), height = 40)
+        assertFalse(Deskew.accepts(before, after))
+    }
+
+    @Test
     fun `a rotation with nothing to show for itself is declined`() {
         // Neither measure moves - this is what turning an upright page over looks like, and it is
         // the one mistake OCR cannot see. No evidence, no rotation.
