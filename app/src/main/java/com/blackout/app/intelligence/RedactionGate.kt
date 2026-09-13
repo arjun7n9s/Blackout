@@ -45,7 +45,7 @@ object RedactionGate {
      *   ≥95 because the pattern or lexicon is closed. Gate 3 is 90 because caption matching is
      *   fuzzy (OCR mangles captions, see [PiiBlocks.fuzzyEquals]).
      */
-    enum class Gate { IDENTIFIER, LABEL, CAPTION_PAIR, NONE }
+    enum class Gate { IDENTIFIER, PUBLIC_ENTITY, LABEL, CAPTION_PAIR, NONE }
 
     data class Verdict(
         val gate: Gate,
@@ -86,6 +86,20 @@ object RedactionGate {
                 action = Action.HIDE,
                 confidence = 99,
                 reason = "identifier: ${identifier.kind.label} = ${identifier.matched}",
+            )
+        }
+
+        // ---- Gate 1b: the issuer is not the secret ---------------------------------------
+        // Runs after the identifier gate, so "State Bank A/c 50100123456789" still hides, and
+        // before the caption gate, so an issuer printed next to a sensitive caption is not
+        // dragged down with it. Measured: without this the workhorse hid INCOME TAX DEPARTMENT,
+        // GOVT. OF INDIA and the card's own title, 8 of 9 spans on a PAN card.
+        if (PublicEntity.isPublicEntity(span.text)) {
+            return Verdict(
+                gate = Gate.PUBLIC_ENTITY,
+                action = Action.KEEP,
+                confidence = 96,
+                reason = "issuer or institution",
             )
         }
 
@@ -297,7 +311,7 @@ object RedactionGate {
         if (looksLikeLabel(ownText)) return null
 
         for (neighbour in listOfNotNull(previousLine, nextLine)) {
-            val caption = captionOnly(neighbour) ?: continue
+            val caption = captionOnly(neighbour, ownText) ?: continue
             if (matchesAny(caption, SENSITIVE_STEMS)) return caption
         }
         return null
@@ -310,12 +324,26 @@ object RedactionGate {
      * Without this fallback, single-word captions like "Name" or "पिता" — common on PAN/Aadhaar
      * cards where every field has its own line — would never reach [matchesAny].
      */
-    private fun captionOnly(neighbour: String): String? {
+    private fun captionOnly(neighbour: String, ownText: String): String? {
         val inline = PiiBlocks.inlineField(neighbour)
-        if (inline != null) return inline.label
+        if (inline != null) {
+            // A neighbour that carries its own value is self-contained and must not also claim
+            // the lines around it. "Name: AMIT KUMAR" is already hidden by the inline branch;
+            // when it was *also* read as a caption for its neighbour it took the line above with
+            // it, and on a real PAN card that line was the card's own title, PERMANENT ACCOUNT
+            // NUMBER CARD.
+            //
+            // The exception is OCR repeating itself - emitting both "Father : BADAL MANDAL" and
+            // a bare "BADAL MANDAL". There the neighbour's value *is* this span, so the caption
+            // genuinely describes it and the duplicate has to go too.
+            return if (sameValue(inline.value, ownText)) inline.label else null
+        }
         if (looksLikeLabel(neighbour)) return neighbour.trim()
         return null
     }
+
+    private fun sameValue(a: String, b: String): Boolean =
+        a.trim().lowercase().replace(WHITESPACE, " ") == b.trim().lowercase().replace(WHITESPACE, " ")
 
     // -------------------------------------------------------------------------------------
     // Fuzzy match (kept local — PiiBlocks.matchesAny is private)

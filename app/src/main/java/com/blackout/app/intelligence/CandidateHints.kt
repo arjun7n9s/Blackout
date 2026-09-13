@@ -70,7 +70,23 @@ object CandidateHints {
         """(?<![A-Za-z0-9])[0-9*xX•×#]{2,6}(?:[\s\-][0-9*xX•×#]{2,6}){1,5}(?![A-Za-z0-9])"""
     )
 
-    private val ACCOUNT = Regex("""(?i)\b(?:a/?c|acct|account|ifsc|iban)\b[\s:.#\-]*([A-Z0-9]{6,24})""")
+    /**
+     * `A/c 50100123456789`, `IFSC HZBN0001429`, `Account No 50100123456789`.
+     *
+     * Two things here are load-bearing, and the pattern was wrong in both directions without them.
+     *
+     * **The filler word.** `Account No 50100123456789` matched *nothing*: after the keyword the
+     * pattern demanded the value immediately, and could not step over `No`. Real account numbers
+     * were being missed on exactly the phrasing statements use most.
+     *
+     * **The digit requirement**, enforced in [detect]. `PERMANENT ACCOUNT NUMBER CARD` captured
+     * the word `NUMBER` as an account number and hid the PAN card's own title; a bare
+     * `Account Number` label captured `Number` and hid the caption. An account number that
+     * contains no digit does not exist.
+     */
+    private val ACCOUNT = Regex(
+        """(?i)\b(?:a/?c|acct|account|ifsc|iban)\b[\s:.#\-]*(?:(?:no|num|number)\b[\s:.#\-]*)?([A-Z0-9]{6,24})"""
+    )
 
     // RBI IFSC: 4-letter bank code, a reserved 0, 6-char branch code. Printed bare next to an
     // "IFSC" caption, so the ACCOUNT pattern above (which needs the keyword in the same span)
