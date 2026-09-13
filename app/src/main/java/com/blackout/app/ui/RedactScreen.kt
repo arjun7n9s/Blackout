@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,14 +48,17 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import com.blackout.app.ocr.SkewMetrics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -85,6 +89,16 @@ fun RedactScreen(
     var pendingShareWarning by remember { mutableStateOf<ShareGuard.Warning?>(null) }
     var trayExpanded by remember { mutableStateOf(false) }
 
+    // Zoom lives here rather than in the ViewModel: it is how the user is *looking* at the page,
+    // not part of the redaction result, and it should not survive a new capture.
+    var zoom by remember { mutableStateOf(1f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(original) {
+        zoom = 1f
+        panOffset = Offset.Zero
+    }
+
     // One haptic when a pass lands and the bars appear.
     LaunchedEffect(state.phase) {
         if (state.phase == Phase.READY && state.hiddenIds.isNotEmpty()) {
@@ -98,14 +112,43 @@ fun RedactScreen(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(state.spans, state.imageWidth, state.imageHeight) {
-                        detectTapGestures { offset ->
+                    .onSizeChanged { viewportSize = it }
+                    // Pinch on the viewport, in screen coordinates. Deliberately *outside* the
+                    // zoomed layer: gesture deltas reported inside it would already be divided by
+                    // the current scale, so zooming would accelerate as you zoomed.
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, gestureZoom, _ ->
+                            val next = (zoom * gestureZoom).coerceIn(1f, MAX_ZOOM)
+                            // Panning a page that fits the screen just slides it off. Only a
+                            // zoomed-in page has anywhere to go.
+                            panOffset = if (next > 1f) {
+                                clampPan(panOffset + pan, next, viewportSize)
+                            } else {
+                                Offset.Zero
+                            }
+                            zoom = next
+                        }
+                    }
+                    .pointerInput(state.spans, state.imageWidth, state.imageHeight, state.mode) {
+                        detectTapGestures { tap ->
                             val t = FitTransform.of(
                                 size.width.toFloat(), size.height.toFloat(),
                                 state.imageWidth, state.imageHeight,
                             )
-                            val point = t.toBitmap(offset.x, offset.y) ?: return@detectTapGestures
-                            val slop = if (t.scale > 0f) (24 / t.scale).toInt() else 0
+                            // Undo the zoom before asking which span was hit. The layer scales
+                            // about its centre, so this is the exact inverse of what graphicsLayer
+                            // draws - without it every tap past 1x lands on the wrong line.
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            val content = Offset(
+                                cx + (tap.x - cx - panOffset.x) / zoom,
+                                cy + (tap.y - cy - panOffset.y) / zoom,
+                            )
+                            val point = t.toBitmap(content.x, content.y)
+                                ?: return@detectTapGestures
+                            // The touch target shrinks on screen as you zoom in, so the slop has
+                            // to shrink with it or a zoomed tap grabs a neighbouring line.
+                            val slop = if (t.scale > 0f) (24 / (t.scale * zoom)).toInt() else 0
                             val hit = RedactionEngine.hitTest(
                                 state.spans, point.first, point.second, slop,
                             ) ?: return@detectTapGestures
@@ -117,6 +160,18 @@ fun RedactScreen(
                         }
                     }
             ) {
+                // Image and overlay share one layer, so the bars cannot drift off the text while
+                // zooming - they are scaled by the same transform, not re-derived from it.
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = zoom
+                            scaleY = zoom
+                            translationX = panOffset.x
+                            translationY = panOffset.y
+                        }
+                ) {
                 Image(
                     bitmap = image,
                     contentDescription = null,
@@ -196,6 +251,7 @@ fun RedactScreen(
                             else -> Unit
                         }
                     }
+                }
                 }
             }
         }
@@ -317,6 +373,22 @@ fun RedactScreen(
             },
         )
     }
+}
+
+/** Far enough to read a mangled Aadhaar digit; beyond this it is all resampling artefacts. */
+private const val MAX_ZOOM = 6f
+
+/**
+ * Keeps a zoomed page from being dragged off the screen.
+ *
+ * At scale `s` the content overhangs the viewport by `(s - 1) / 2` in each direction, and that
+ * overhang is exactly how far it may travel before an edge pulls into view.
+ */
+private fun clampPan(pan: Offset, scale: Float, viewport: IntSize): Offset {
+    if (viewport.width == 0 || viewport.height == 0) return pan
+    val maxX = viewport.width * (scale - 1f) / 2f
+    val maxY = viewport.height * (scale - 1f) / 2f
+    return Offset(pan.x.coerceIn(-maxX, maxX), pan.y.coerceIn(-maxY, maxY))
 }
 
 /**
