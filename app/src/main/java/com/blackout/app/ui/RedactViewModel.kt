@@ -30,6 +30,43 @@ import kotlinx.coroutines.withContext
 
 enum class Phase { IDLE, WORKING, READY, FAILED }
 
+/**
+ * What tapping the image does.
+ *
+ * Both modes read the same spans and the same decisions; only the gesture and the painting
+ * differ. Nothing about [BLACKOUT]'s analysis is recomputed when the user switches - [COPY] is a
+ * different view of a result already in memory.
+ */
+enum class RedactMode {
+    /** The default. Bars are painted, and a tap toggles one span's verdict. */
+    BLACKOUT,
+
+    /**
+     * Nothing is painted and a tap copies that line's text.
+     *
+     * Deliberately shows the page *unredacted*: this mode exists to get a value out of a
+     * document, which is the opposite job. Nothing here can reach
+     * [com.blackout.app.share.ShareRedacted] - copying to the clipboard is the only output, and
+     * the user picks each line by hand.
+     */
+    COPY,
+}
+
+/**
+ * Who the document is being shared with.
+ *
+ * Whether a disclosure is appropriate depends on the recipient, not on the data alone - an
+ * address is ordinary to a courier and sensitive to a stranger. Selecting one records that
+ * intent; it does not yet change any verdict.
+ */
+enum class Persona(val label: String, val blurb: String) {
+    PUBLIC("Public", "Anyone could see this"),
+    BANK("Bank / KYC", "Needs identity, not contacts"),
+    EMPLOYER("Employer / HR", "Needs name and role"),
+    MEDICAL("Doctor / Insurer", "Needs the clinical detail"),
+    GOVERNMENT("Government", "Needs the identifiers"),
+}
+
 data class RedactUiState(
     val phase: Phase = Phase.IDLE,
     val statusLine: String = "",
@@ -45,6 +82,10 @@ data class RedactUiState(
     val showDebug: Boolean = false,
     /** Degrees of deskew applied to the working image, 0 when the page was already upright. */
     val deskewDeg: Float = 0f,
+    val mode: RedactMode = RedactMode.BLACKOUT,
+    val persona: Persona = Persona.PUBLIC,
+    /** Set briefly after a copy, so the UI can confirm what went to the clipboard. */
+    val lastCopied: String? = null,
 ) {
     val degraded: Boolean get() = analysis.degraded
     val hideCount: Int get() = decisions.values.count { it.action == Action.HIDE }
@@ -284,6 +325,35 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggleDebug() = _state.update { it.copy(showDebug = !it.showDebug) }
+
+    fun setMode(mode: RedactMode) = _state.update { it.copy(mode = mode, lastCopied = null) }
+
+    /**
+     * Records who this is going to.
+     *
+     * Stored only. It does not re-run the pipeline and does not change a single verdict yet -
+     * the prompt packs that would act on it are not built. Kept honest deliberately: the HUD
+     * must never imply a protection that is not running.
+     */
+    fun setPersona(persona: Persona) = _state.update { it.copy(persona = persona) }
+
+    /** Copies one span's text. Only reachable in [RedactMode.COPY]. */
+    fun copySpan(spanId: Int): String? {
+        val text = _state.value.spans.firstOrNull { it.id == spanId }?.text?.trim()
+        if (text.isNullOrEmpty()) return null
+        val clipboard = appContext.getSystemService(android.content.ClipboardManager::class.java)
+            ?: return null
+        // Flagged sensitive so the system does not surface a clipboard preview toast containing
+        // the very value the user is handling, and so it is excluded from clipboard history.
+        val clip = android.content.ClipData.newPlainText("Blackout", text).apply {
+            description.extras = android.os.PersistableBundle().apply {
+                putBoolean("android.content.extra.IS_SENSITIVE", true)
+            }
+        }
+        clipboard.setPrimaryClip(clip)
+        _state.update { it.copy(lastCopied = text) }
+        return text
+    }
 
     /** Burns the current redaction into a fresh bitmap. The only thing allowed to be exported. */
     suspend fun renderRedacted(): Bitmap? = withContext(Dispatchers.Default) {

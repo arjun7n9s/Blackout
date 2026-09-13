@@ -69,12 +69,15 @@ class ModelCatalog(private val context: Context) {
         val models = if (present.isEmpty()) "no models in ${dir.absolutePath}"
         else present.joinToString(", ")
         val soc = NpuSupport.socModel() ?: "soc?"
-        val npu = when {
-            !NpuSupport.dispatchPresent(context) -> "NPU: no dispatch .so"
-            ALL.none { locateNpu(it) != null } -> "NPU: dispatch ok, no $soc weights"
-            else -> "NPU: " + ALL.mapNotNull { spec ->
-                locateNpu(spec)?.let { spec.displayName }
-            }.joinToString(",")
+        // Report the path that actually runs. This used to describe LiteRT's NPU dispatch
+        // library, which is the dead end we abandoned - so the panel read "NPU: no dispatch .so"
+        // on a device where the Hexagon was demonstrably producing tokens through Genie/QAIRT.
+        // A debug panel that contradicts the HUD is worse than no panel.
+        val bundle = com.blackout.app.intelligence.npu.GenieNpuRuntime.locate(context)
+        val npu = if (bundle != null) {
+            "NPU: Genie/QAIRT bundle ready"
+        } else {
+            "NPU: no Genie bundle pushed"
         }
         return "$models · $soc · $npu"
     }

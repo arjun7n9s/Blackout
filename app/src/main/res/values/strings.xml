@@ -37,4 +37,15 @@
     <string name="share_guard_back">Go back</string>
     <string name="no_text_found">No text found in this image.</string>
     <string name="home_footer">OCR and both models run on this phone. Nothing is uploaded.</string>
+    <string name="mode_blackout">Blackout</string>
+    <string name="mode_copy">Copy</string>
+    <string name="mode_blackout_hint">Hide sensitive values</string>
+    <string name="mode_copy_hint">Tap a line to copy it</string>
+    <string name="tap_to_copy">Tap any line to copy it</string>
+    <string name="copied_value">Copied “%1$s”</string>
+    <string name="persona_title">Sharing with</string>
+    <string name="persona_not_wired">Recorded only — does not change redaction yet</string>
+    <string name="persona_done">Done</string>
+    <string name="persona_chip">To: %1$s</string>
+    <string name="persona_selected_mark">OK</string>
 </resources>

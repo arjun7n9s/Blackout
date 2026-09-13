@@ -4,10 +4,13 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -80,6 +83,7 @@ fun RedactScreen(
     val original = viewModel.original
     val image = remember(original) { original?.asImageBitmap() }
     var pendingShareWarning by remember { mutableStateOf<ShareGuard.Warning?>(null) }
+    var trayExpanded by remember { mutableStateOf(false) }
 
     // One haptic when a pass lands and the bars appear.
     LaunchedEffect(state.phase) {
@@ -106,7 +110,10 @@ fun RedactScreen(
                                 state.spans, point.first, point.second, slop,
                             ) ?: return@detectTapGestures
                             Haptics.tick(context)
-                            viewModel.toggleSpan(hit.id)
+                            when (state.mode) {
+                                RedactMode.BLACKOUT -> viewModel.toggleSpan(hit.id)
+                                RedactMode.COPY -> viewModel.copySpan(hit.id)
+                            }
                         }
                     }
             ) {
@@ -122,6 +129,22 @@ fun RedactScreen(
                         size.width, size.height, state.imageWidth, state.imageHeight,
                     )
                     if (t.scale <= 0f) return@Canvas
+
+                    // Copy mode shows the page as it is - painting a bar over a line the user is
+                    // trying to read off would defeat the mode. A faint wash marks what is
+                    // tappable. Nothing in this branch can reach the export path.
+                    if (state.mode == RedactMode.COPY) {
+                        for (span in state.spans) {
+                            val r = span.rect
+                            drawRect(
+                                color = Color.White,
+                                topLeft = Offset(t.viewLeft(r), t.viewTop(r)),
+                                size = Size(t.viewWidth(r), t.viewHeight(r)),
+                                alpha = 0.10f,
+                            )
+                        }
+                        return@Canvas
+                    }
 
                     for (span in state.spans) {
                         val decision = state.decisions[span.id] ?: continue
@@ -175,23 +198,30 @@ fun RedactScreen(
             }
         }
 
-        HudChip(
-            degraded = state.degraded,
-            backend = state.analysis.backendReport.chip().ifBlank { state.analysis.hudBackend },
-            modifier = Modifier
+        // HUD and persona share the top edge, so they share one Row. Positioning both absolutely
+        // collided: the HUD line grows with the backend report and ran straight under the chip.
+        Row(
+            Modifier
                 .align(Alignment.TopStart)
+                .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(start = 16.dp, top = 8.dp),
-        )
-
-        OutlinedButton(
-            onClick = viewModel::toggleDebug,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(end = 12.dp, top = 4.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-        ) { Text("debug", fontSize = 12.sp) }
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HudChip(
+                degraded = state.degraded,
+                backend = state.analysis.backendReport.chip().ifBlank { state.analysis.hudBackend },
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(8.dp))
+            // The persona chip belongs here and is deliberately not mounted yet - see
+            // [PersonaSheet]. Nothing personas-related is reachable on the phone.
+            OutlinedButton(
+                onClick = viewModel::toggleDebug,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+            ) { Text("debug", fontSize = 12.sp) }
+        }
 
         if (state.showDebug) {
             DebugPanel(
@@ -205,22 +235,53 @@ fun RedactScreen(
             )
         }
 
-        BottomBar(
-            enabled = state.phase == Phase.READY,
-            hideCount = state.hideCount,
-            onRetake = onRetake,
-            onShare = {
-                // C-005: a motion-blurred statement produced one span, zero bars, and a normal
-                // share button. Make the user look at that before it leaves the app.
-                val warning = state.shareWarning
-                if (warning != null) pendingShareWarning = warning
-                else viewModel.original?.let { onShare(it) }
-            },
-            modifier = Modifier
+        // One column owns the bottom edge: copy confirmation, mode tray, then the actions. Two
+        // separately aligned BottomCenter children would sit on top of each other.
+        Column(
+            Modifier
                 .align(Alignment.BottomCenter)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(horizontal = 16.dp, vertical = 18.dp),
-        )
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (state.phase == Phase.READY) {
+                state.lastCopied?.let { copied ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color(0xFFFFC043),
+                        modifier = Modifier.padding(bottom = 10.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.copied_value, copied.take(28)),
+                            color = Color.Black,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+                ModeTray(
+                    mode = state.mode,
+                    expanded = trayExpanded,
+                    onExpandedChange = { trayExpanded = it },
+                    onModeChange = viewModel::setMode,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+            }
+
+            BottomBar(
+                enabled = state.phase == Phase.READY,
+                hideCount = state.hideCount,
+                copyMode = state.mode == RedactMode.COPY,
+                onRetake = onRetake,
+                onShare = {
+                    // C-005: a motion-blurred statement produced one span, zero bars, and a
+                    // normal share button. Make the user look at that before it leaves the app.
+                    val warning = state.shareWarning
+                    if (warning != null) pendingShareWarning = warning
+                    else viewModel.original?.let { onShare(it) }
+                },
+            )
+        }
 
         if (state.phase == Phase.WORKING) {
             WorkingOverlay(state.statusLine)
@@ -253,6 +314,211 @@ fun RedactScreen(
                 }
             },
         )
+    }
+}
+
+/**
+ * The mode tray: one row collapsed, with a line of explanation per mode when expanded.
+ *
+ * Modelled on a phone camera's mode strip, minus the thing that strip usually carries. There is
+ * no Photo/Video pair here because there is no second capture type - Blackout and Copy are two
+ * ways of reading one still, not two things to record.
+ */
+@Composable
+private fun ModeTray(
+    mode: RedactMode,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onModeChange: (RedactMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = Color.Black.copy(alpha = 0.72f),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures { _, dragAmount ->
+                        if (dragAmount < -6f) onExpandedChange(true)
+                        if (dragAmount > 6f) onExpandedChange(false)
+                    }
+                }
+                .padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Grab handle. Tappable as well as draggable - a 4dp strip is not a touch target, so
+            // the tap area is padded well beyond the mark that is drawn.
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onExpandedChange(!expanded) }
+                    .padding(horizontal = 40.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.35f))
+                        .size(width = 36.dp, height = 4.dp)
+                )
+            }
+
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    for (entry in RedactMode.entries) {
+                        ModeButton(
+                            mode = entry,
+                            selected = entry == mode,
+                            onClick = { onModeChange(entry) },
+                        )
+                    }
+                }
+            } else {
+                // Collapsed still has to answer "which mode am I in" - the gesture on the image
+                // means different things, and a tray that hides that is a trap.
+                Text(
+                    text = stringResource(
+                        when (mode) {
+                            RedactMode.BLACKOUT -> R.string.mode_blackout
+                            RedactMode.COPY -> R.string.mode_copy
+                        }
+                    ),
+                    color = Color(0xFFFFC043),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Icon over label, the shape a camera mode strip uses. */
+@Composable
+private fun ModeButton(
+    mode: RedactMode,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val tint = if (selected) Color(0xFFFFC043) else Color.White.copy(alpha = 0.6f)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+    ) {
+        Box(
+            Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(50))
+                .background(
+                    if (selected) Color.White.copy(alpha = 0.12f) else Color.Transparent
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(
+                    when (mode) {
+                        RedactMode.BLACKOUT -> R.drawable.ic_mode_blackout
+                        RedactMode.COPY -> R.drawable.ic_mode_copy
+                    }
+                ),
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = stringResource(
+                when (mode) {
+                    RedactMode.BLACKOUT -> R.string.mode_blackout
+                    RedactMode.COPY -> R.string.mode_copy
+                }
+            ),
+            color = tint,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+/**
+ * Who the document is going to.
+ *
+ * **Staged, not mounted.** Nothing in the app opens this yet, by request - it is kept built and
+ * compiling so it can be switched on in one place once the prompt packs that would act on it
+ * exist. Until then there is no persona affordance on the phone at all, which is the honest
+ * state: selecting an audience that changes no verdict would imply a protection that is not
+ * running.
+ */
+@Suppress("unused")
+@Composable
+private fun PersonaSheet(
+    selected: Persona,
+    onPick: (Persona) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        color = Color(0xFF16161A),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Text(stringResource(R.string.persona_title), color = Color.White, fontSize = 15.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                stringResource(R.string.persona_not_wired),
+                color = Color(0xFFFFC043),
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            for (persona in Persona.entries) {
+                val isOn = persona == selected
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onPick(persona) }
+                        .background(
+                            if (isOn) Color.White.copy(alpha = 0.08f) else Color.Transparent
+                        )
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            persona.label,
+                            color = if (isOn) Color(0xFFFFC043) else Color.White,
+                            fontSize = 14.sp,
+                        )
+                        Text(
+                            persona.blurb,
+                            color = Color.White.copy(alpha = 0.45f),
+                            fontSize = 11.sp,
+                        )
+                    }
+                    if (isOn) {
+                        Text(
+                            stringResource(R.string.persona_selected_mark),
+                            color = Color(0xFFFFC043),
+                            fontSize = 15.sp,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                Text(stringResource(R.string.persona_done), color = Color.White)
+            }
+        }
     }
 }
 
@@ -350,13 +616,17 @@ private fun DebugLine(key: String, value: String) {
 private fun BottomBar(
     enabled: Boolean,
     hideCount: Int,
+    copyMode: Boolean = false,
     onRetake: () -> Unit,
     onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
         Text(
-            text = stringResource(R.string.tap_to_toggle),
+            // The gesture does something different per mode, so the hint has to follow it.
+            text = stringResource(
+                if (copyMode) R.string.tap_to_copy else R.string.tap_to_toggle
+            ),
             color = Color.White.copy(alpha = 0.55f),
             fontSize = 12.sp,
             textAlign = TextAlign.Center,

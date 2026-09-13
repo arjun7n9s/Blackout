@@ -121,10 +121,23 @@ object NpuGate {
         return Verdict(true, "dispatch + vendor HTP $hexagon on ${soc ?: "unknown soc"}", soc, hexagon)
     }
 
-    /** One line for the debug panel / ARCH evidence. */
+    /**
+     * One line for the debug panel / ARCH evidence.
+     *
+     * Leads with the path that actually executes. Everything [evaluate] inspects belongs to the
+     * **retired** LiteRT dispatch route, so on its own this line read "npu closed ... no
+     * libLiteRtDispatch_Qualcomm.so" directly underneath a workhorse line saying `NPU · 62ms`.
+     * Both were true and together they were nonsense. The Genie/QAIRT bundle is what runs; the
+     * LiteRT gate is reported second and named as retired, because it is still the thing that
+     * decides whether [NpuClassifyStage] is skipped.
+     */
     fun describe(context: Context): String {
+        val genieReady = com.blackout.app.intelligence.npu.GenieNpuRuntime.locate(context) != null
         val verdict = evaluate(context)
-        val state = if (verdict.enabled) "open" else "closed"
-        return "npu $state · soc=${verdict.socModel ?: "?"} · htp=${verdict.hexagon ?: "none"} · ${verdict.reason}"
+        val soc = verdict.socModel ?: "?"
+        val htp = verdict.hexagon ?: "none"
+        val genie = if (genieReady) "genie/qairt ready (workhorse runs here)" else "genie bundle missing"
+        val litert = if (verdict.enabled) "litert classify open" else "litert classify retired"
+        return "$genie · soc=$soc · htp=$htp · $litert"
     }
 }
