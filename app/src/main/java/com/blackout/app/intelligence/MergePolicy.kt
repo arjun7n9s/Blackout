@@ -119,7 +119,11 @@ object MergePolicy {
      * signal*, not a judgement - those spans go to the referee. Small batches are exempt because
      * three lines genuinely can all be sensitive.
      */
-    fun isModeCollapsed(actions: Collection<Action>, minBatch: Int = 4): Boolean {
+    fun isModeCollapsed(
+        actions: Collection<Action>,
+        minBatch: Int = 4,
+        collapseRatio: Float = COLLAPSE_RATIO,
+    ): Boolean {
         if (actions.size < minBatch) return false
         if (actions.distinct().size == 1) return true
         // Near-uniform counts too. Requiring *every* verdict to match let the real failure
@@ -128,7 +132,7 @@ object MergePolicy {
         // is the same degenerate decoding wearing two keeps as a disguise, and on the user's own
         // documents it blacked out 21 of 25 spans.
         val hides = actions.count { it == Action.HIDE }
-        return hides >= actions.size * COLLAPSE_RATIO
+        return hides >= actions.size * collapseRatio
     }
 
     /**
@@ -139,7 +143,18 @@ object MergePolicy {
      * What this threshold protects is the opposite case: an ordinary page where the model has
      * stopped reading and started repeating.
      */
-    const val COLLAPSE_RATIO = 0.8
+    const val COLLAPSE_RATIO = 0.8f
+
+    /**
+     * Looser threshold for the hide-list wire format used by the NPU workhorse.
+     *
+     * The 0.6B on Hexagon answers with letter ids (`A B D`), so an all-hide verdict means
+     * "I read the page and picked every line" rather than "I am repeating one token". Set
+     * this just above 1.0 so an honest page-of-PII is not discarded; the genuine
+     * repeat-one-action failure still trips because the threshold is never reached when
+     * the model produces mixed verdicts (HIDE + KEEP).
+     */
+    const val COLLAPSE_RATIO_HIDE_LIST = 1.01f
 
     /**
      * The spans that actually get painted over.

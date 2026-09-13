@@ -67,6 +67,9 @@ object CpuDeterministicStage {
         // as an address because it sits between "CO:" and "PO:".
         val addressIds = PiiBlocks.addressBlock(spans)
 
+        // Pass 1: existing rules. These are pinned by 17 fixture tests in
+        // CpuDeterministicStageTest, so we keep them byte-for-byte and add the gate as a
+        // standalone-neighbour fallback below.
         for (span in spans) {
             if (span.isBlank) continue
             val spanHints = hints[span.id].orEmpty()
@@ -118,6 +121,48 @@ object CpuDeterministicStage {
                     span.id, Action.KEEP, DecisionSource.DETERMINISTIC, "document header",
                 )
             }
+        }
+
+        // Pass 2: RedactionGate as a STANDALONE-neighbour fallback.
+        //
+        // The rules above all fire on a label-column layout (SpanRole.VALUE) or a regex hit.
+        // On single-column ID cards, overlapping-card piles, and multi-doc collages,
+        // FieldLayout cannot find a label column - every span stays STANDALONE, the VALUE rule
+        // is skipped, and personal names leak through to the model workhorse (which often
+        // mode-collapses and lets them stay visible).
+        //
+        // RedactionGate.evaluate() fires on STANDALONE spans when the previous or next line
+        // carries a sensitive caption ("Name", "पिता", "Address", etc., fuzzy-matched so OCR
+        // mangling like "Disria" -> "District" still triggers). It also fires on any span
+        // carrying a STRONG identifier pattern regardless of role - the same gate the user
+        // asked for ("redact long codes, not dates; the label decides").
+        //
+        // Only spans the existing rules did NOT claim are eligible. This keeps every existing
+        // fixture test green and adds the new gate without double-counting.
+        val spanIndex = spans.withIndex().associate { (i, s) -> s.id to i }
+        for (span in spans) {
+            if (span.isBlank) continue
+            if (out.containsKey(span.id)) continue
+            val spanHints = hints[span.id].orEmpty()
+            val idx = spanIndex[span.id] ?: continue
+            val previous = spans.getOrNull(idx - 1)?.text
+            val next = spans.getOrNull(idx + 1)?.text
+            val verdict = RedactionGate.evaluate(span, spanHints, previous, next)
+            if (verdict.gate == RedactionGate.Gate.NONE) continue
+            val action = verdict.action
+            if (action == Action.UNSURE || action == Action.KEEP) {
+                // Gate 2 (LABEL) returns KEEP, but the existing label rules already cover that
+                // case. If Gate 2 fires here it is on a STANDALONE caption that the existing
+                // rules did not claim - record it as a defensive KEEP so the model cannot later
+                // hide it.
+                if (action == Action.KEEP) {
+                    out[span.id] = SpanDecision(span.id, Action.KEEP, DecisionSource.LAYOUT, verdict.reason)
+                }
+                continue
+            }
+            out[span.id] = SpanDecision(
+                span.id, Action.HIDE, DecisionSource.DETERMINISTIC, verdict.reason,
+            )
         }
 
         return Result(

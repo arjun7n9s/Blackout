@@ -157,9 +157,15 @@ class RedactViewModel(app: Application) : AndroidViewModel(app) {
                     imageHeight = result.imageHeight,
                 ) { stage -> _state.update { it.copy(statusLine = label(stage)) } }
             }.getOrElse { t ->
+                // Never swallow this. A throw here disables *every* deterministic detector at
+                // once - the page comes back with 47 spans, all KEEP, and nothing on screen says
+                // why. Measured on device: PAN, Aadhaar, card, email, phone and address all
+                // visible, hide=0, while the app looked like it had simply found nothing to do.
+                // A silent catch in front of the redaction path is worse than a crash.
+                Log.e(STATS_TAG, "analysis threw - ALL REDACTION DISABLED", t)
                 AnalysisResult(
                     degraded = true,
-                    degradedReason = t.message ?: "analysis failed",
+                    degradedReason = t.message ?: t::class.java.simpleName,
                     spans = result.spans,
                 )
             }

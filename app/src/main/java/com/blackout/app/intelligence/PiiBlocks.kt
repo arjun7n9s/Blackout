@@ -53,8 +53,26 @@ object PiiBlocks {
     /** At least two anchors before we believe a run of lines is really an address. */
     private const val MIN_ADDRESS_ANCHORS = 2
 
-    /** `Label: value` - caption at most four words, then a colon, then something. */
-    private val INLINE = Regex("""^\s*([A-Za-z][A-Za-z ./'\-]{0,28}?)\s*[:：]\s*(.+)$""")
+    /**
+     * `Label: value` - caption at most four words, then a colon, then something.
+     *
+     * **No `UNICODE_CHARACTER_CLASS`.** Android's regex engine is ICU-backed, not OpenJDK, and
+     * rejects that flag outright: `IllegalArgumentException: UNICODE_CHARACTER_CLASS flag not
+     * supported`, thrown from `Pattern.<init>`. Because this is a `val` on an `object`, the throw
+     * happened during class initialisation, so the first touch of PiiBlocks killed the whole
+     * deterministic stage - measured on device as hide=0, keep=47, with PAN, Aadhaar, card,
+     * email, phone and address all left readable.
+     *
+     * The flag was never needed. It only makes the *predefined* shorthands (`\w \s \d \b`)
+     * Unicode-aware; `\p{L}` and `\p{M}` are Unicode categories and work without it, and those
+     * are what carry Devanagari here. Devanagari words are separated by ordinary U+0020, so
+     * plain `\s` is correct too.
+     *
+     * Desktop JVM *does* accept the flag, so no unit test can catch this - only the device can.
+     */
+    private val INLINE: java.util.regex.Pattern = java.util.regex.Pattern.compile(
+        """^([\p{L}\p{M}][\p{L}\p{M} ./'\-]{0,28}?)[\s]*[:：][\s]*(.+)$"""
+    )
 
     /** Captions whose value identifies a person, place or account. */
     private val SENSITIVE_STEMS = listOf(
@@ -62,10 +80,12 @@ object PiiBlocks {
         "address", "addr", "po", "post", "vtc", "village", "town", "city",
         "district", "dist", "sub district", "subdistrict", "state", "street",
         "house", "flat", "landmark", "pin", "pincode", "pin code", "postal code",
-        "name", "father", "mother", "husband", "guardian", "holder",
+        "name", "father", "mother", "husband", "guardian",
         "dob", "date of birth", "birth", "age",
         "mobile", "phone", "tel", "email", "e-mail",
         "account", "card", "customer id", "employee",
+        // Devanagari captions - matched on the raw (non-lowercased) label.
+        "नाम", "पिता", "पति", "माता", "जन्म तिथि", "मोबाइल", "पता",
     )
 
     /** The subset that specifically means "this is part of a postal address". */
@@ -80,14 +100,35 @@ object PiiBlocks {
 
     /** Splits `Label: value`, or null when the span is not that shape. */
     fun inlineField(text: String): InlineField? {
-        val m = INLINE.find(text.trim()) ?: return null
-        val label = m.groupValues[1].trim()
-        val value = m.groupValues[2].trim()
+        val m = INLINE.matcher(text.trim())
+        if (!m.find()) return null
+        val label = m.group(1)?.trim() ?: return null
+        val value = m.group(2)?.trim() ?: return null
         if (label.isEmpty() || value.isEmpty()) return null
-        if (label.split(Regex("\\s+")).size > 4) return null
+        if (label.split(Regex("""\s+""")).size > 4) return null
         // A caption is letters; digits before the colon means this is content, e.g. "12:30".
         if (DIGIT.containsMatchIn(label)) return null
         return InlineField(label, value)
+    }
+
+    /**
+     * Test-only: expose the matcher for direct testing. Not part of the public API.
+     */
+    internal fun debugInlineMatch(text: String): String {
+        val sb = StringBuilder()
+        sb.appendLine("text='$text' text.length=${text.length} text.bytes=${text.toByteArray(Charsets.UTF_8).size}")
+        // Simple probe: does \p{L}+ match the first chars?
+        val probe = java.util.regex.Pattern.compile("\\p{L}+")
+        val pm = probe.matcher(text)
+        sb.appendLine("probe \\p{L}+ on text: found=${pm.find()} matched='${if (pm.find()) pm.group() else "<none>"}'")
+        // Now full INLINE
+        val m = INLINE.matcher(text.trim())
+        sb.appendLine("pattern='${INLINE.pattern()}' flags=${INLINE.flags()}")
+        if (!m.find()) {
+            return sb.toString() + "INLINE: no match"
+        }
+        sb.appendLine("INLINE label='${m.group(1)}' value='${m.group(2)}'")
+        return sb.toString()
     }
 
     /** True when [label] names a field whose value is personal. Fuzzy - OCR mangles captions. */

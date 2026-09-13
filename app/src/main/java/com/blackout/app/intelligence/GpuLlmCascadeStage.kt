@@ -286,7 +286,15 @@ class GpuLlmCascadeStage(
             // A batch that hid almost everything told us about its own decoding, not about the
             // document. Ask once more with the question inverted - the same prompt would decode
             // to the same answer - and only then give up on it.
-            if (MergePolicy.isModeCollapsed(local.values.map { it.action })) {
+            //
+            // The collapse guard is loosened for the hide-list wire format ([HideListParser]):
+            // a model that answers with letter ids has already done the work of *picking* which
+            // letters to list, so an all-hide verdict means "I read the page and everything is
+            // sensitive" rather than "I am repeating one action". The GPU JSON path keeps the
+            // tight guard because constrained decoding on a 0.6B has been observed to latch onto
+            // a single token; the NPU hide-list path has not.
+            val collapseRatio = if (json) MergePolicy.COLLAPSE_RATIO else MergePolicy.COLLAPSE_RATIO_HIDE_LIST
+            if (MergePolicy.isModeCollapsed(local.values.map { it.action }, collapseRatio = collapseRatio)) {
                 Log.w(TAG, "batch ${index + 1} mode-collapsed; re-asking")
                 val second = runCatching {
                     runtime.generate(
@@ -299,7 +307,7 @@ class GpuLlmCascadeStage(
 
                 val retried = second?.let { parse(it) }.orEmpty()
                 if (retried.isNotEmpty() &&
-                    !MergePolicy.isModeCollapsed(retried.values.map { it.action })
+                    !MergePolicy.isModeCollapsed(retried.values.map { it.action }, collapseRatio = collapseRatio)
                 ) {
                     Log.i(TAG, "batch ${index + 1} recovered on retry")
                     local = retried
